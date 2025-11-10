@@ -3,7 +3,6 @@ import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import pytorch3d
 from tqdm import tqdm
 import wandb
 import math
@@ -94,6 +93,7 @@ class D3PM(nn.Module):
             self.pts_encoder = PointNetfeat(num_points=self.cfg.num_points, out_dim=1024)
         elif self.cfg.pts_encoder == 'pointnet2':
             self.pts_encoder = Pointnet2ClsMSG(0)
+
         elif self.cfg.pts_encoder == 'pointnet_and_pointnet2':
             self.pts_pointnet = PointNetfeat(num_points=self.cfg.num_points, out_dim=1024)
             self.pts_pointnet2 = Pointnet2ClsMSG(0)
@@ -179,7 +179,8 @@ class D3PM(nn.Module):
         if self.cfg.pts_encoder == 'pointnet':
             return self.pts_encoder(pts.permute(0,2,1))
         elif self.cfg.pts_encoder == 'pointnet2':
-            return self.pts_encoder(pts)
+            pts = self.pts_encoder(pts)
+            return pts
         
         elif self.cfg.pts_encoder == 'pointnet_and_pointnet2':
             feat1 = self.pts_pointnet(pts.permute(0,2,1))
@@ -235,7 +236,6 @@ class D3PM(nn.Module):
         out = torch.log(fact1 + self.eps) + torch.log(fact2 + self.eps)
         t_broadcast = t.reshape((t.shape[0], 1))
         return torch.where(t_broadcast == 1, x_0_logits, out)
-
 
 
 

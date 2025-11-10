@@ -1,4 +1,6 @@
-opencv-python==4.2.0.32
-scipy==1.4.1
-numpy==1.23.5
-tensorboardX==2.5.1
+opencv-python>=4.10,<4.12
+scipy==1.12.0
+numpy>=1.21,<2.0
+tensorboardX==2.6.2.2
+tensorboard==2.17.0
+open3d==0.18.0

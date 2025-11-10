@@ -132,6 +132,7 @@ class PoseDataset(data.Dataset):
 
         joint_state = [0. for _ in range(self.num_parts-1)]  # 轴角度
         joint_para = [[[0 for _ in range(3)] for _ in range(2)] for _ in range(self.joint_num)]  
+
         """
         if self.cate_id == 2:
             for idx in range(self.num_parts-1):
@@ -188,15 +189,19 @@ class PoseDataset(data.Dataset):
         pc_temps = []
         label_all = []
         pc_all = o3d.geometry.PointCloud()
+
         for part_id in range(self.num_parts):
             part_seg = link_info[part_id]['segmentation']
             rle = None
+
             try:
                 """
                     maskUtils.frPyObjects 这个函数将其中的多边形（polygon）
                     或未压缩的RLE（uncompressed RLE）转换为压缩的RLE格式，以便于后续的处理和分析。
                 """
+
                 rle = maskUtils.frPyObjects(part_seg, 640,640)
+
             except:
                 print(type(index))
                 print('index = ',index)
@@ -211,12 +216,13 @@ class PoseDataset(data.Dataset):
             color = o3d.geometry.Image(rgb * np.repeat(mask[..., np.newaxis], 3, 2))
             deep = o3d.geometry.Image(depth * mask)
             rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(color, deep, 1000.0, 20.0, convert_rgb_to_intensity=True)
+
             #生成点云
             pc_temp = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_image, self.camera_intrinsics)
+
             pc_temps.append(pc_temp)
             points_temp = np.asarray(pc_temp.points)
             pc_all_points.append(points_temp)
-
 
         pc = np.concatenate(pc_all_points)  # 所有点构成的点云
 
@@ -509,15 +515,15 @@ class PoseDataset(data.Dataset):
     #返回对称信息
     def get_sym_info_part(self, c,):
         if c == 'laptop':
-            sym = np.array([0, 0, 0, 1], dtype=np.int)
+            sym = np.array([0, 0, 0, 1], dtype=int)
         if c =='eyeglasses':
-            sym = np.array([0, 0, 0, 1], dtype=np.int)
+            sym = np.array([0, 0, 0, 1], dtype=int)
         if c =='dishwasher':
-            sym = np.array([0, 0, 0, 1], dtype=np.int)
+            sym = np.array([0, 0, 0, 1], dtype=int)
         if c == 'drawer':
-            sym = np.array([0, 0, 0, 1], dtype=np.int)
+            sym = np.array([0, 0, 0, 1], dtype=int)
         if c =='scissors':
-            sym = np.array([0, 0, 0, 0], dtype=np.int)
+            sym = np.array([0, 0, 0, 0], dtype=int)
 
         return sym
     
@@ -594,6 +600,7 @@ def process_batch(batch_sample,
                   mini_batch_size=None,
                   PTS_AUG_PARAMS=None):
     #rot_matrix
+
     assert pose_mode in ['quat_wxyz', 'quat_xyzw', 'euler_xyz', 'euler_xyz_sx_cx', 'rot_matrix'], \
         f"the rotation mode {pose_mode} is not supported!"
     if PTS_AUG_PARAMS==None:
@@ -947,6 +954,7 @@ def get_data_loaders(
     cate_id=1,
     num_workers=0,
 ):
+
     # 设置随机种子以确保可重复性
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
@@ -960,6 +968,7 @@ def get_data_loaders(
         data_dir=data_path,
         cate_id=cate_id
     )
+
     total_size = len(dataset)
     test_size = int((1-percentage_data) * total_size)
     indices = torch.randperm(total_size).tolist()
@@ -984,6 +993,7 @@ def get_data_loaders(
         drop_last=False,
         pin_memory=True,
     )
+
     val_dataloader = torch.utils.data.DataLoader(
         test_dataset,
         batch_size=batch_size,
@@ -993,9 +1003,10 @@ def get_data_loaders(
         drop_last=False,
         pin_memory=True,
     )
+
     if mode != 'test':
         return dataloader, val_dataloader
-    
+
     return dataloader
 
 
@@ -1142,6 +1153,7 @@ def get_data_loaders_from_cfg(cfg, data_type=['train', 'val', 'test']):
             cate_id = cfg.cate_id,
             num_workers=cfg.num_workers,
         ) 
+
         data_loaders['train_loader'] = train_loader
 
         data_loaders['val_loader'] = val_loader
@@ -1164,8 +1176,8 @@ def get_data_loaders_from_cfg(cfg, data_type=['train', 'val', 'test']):
 if __name__ == '__main__':
    
     from tqdm import tqdm
-    train_loader, val_loader = get_data_loaders(data_path='')
-    
+    train_loader, val_loader = get_data_loaders(data_path='/home/zming/diffpose/6D/code/ArtImage-High-level/ArtImage')
+
         # 处理训练集
     for batch_sample in tqdm(train_loader):
         batch_sample = process_batch(
@@ -1185,4 +1197,3 @@ if __name__ == '__main__':
         )
     
         
-

@@ -10,7 +10,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import _pickle as cPickle
 import pytorch3d
-import pytorch3d.io
+# import pytorch3d.io
 import torch
 import copy
 

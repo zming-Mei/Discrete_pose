@@ -26,14 +26,14 @@ pip install -r requirements.txt
 git clone https://github.com/facebookresearch/pytorch3d.git
 cd pytorch3d
 git checkout -f v0.7.2
-pip install -e .
+pip install --no-build-isolation -e . --config-settings editable_mode=compat
 ```
 
 
 - ### Compile pointnet2
 ``` bash
 cd networks/pts_encoder/pointnet2_utils/pointnet2
-python setup.py install
+pip install --no-build-isolation -e . --config-settings editable_mode=compat
 ```
 
 ## Download dataset and models

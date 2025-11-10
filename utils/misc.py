@@ -2,7 +2,7 @@ import numpy as np
 import os
 import copy
 import pytorch3d
-import pytorch3d.io
+# import pytorch3d.io
 import torch
 import torch.distributed as dist
 from ipdb import set_trace

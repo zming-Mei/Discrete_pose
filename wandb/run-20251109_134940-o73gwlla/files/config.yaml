@@ -1,0 +1,74 @@
+_wandb:
+    value:
+        cli_version: 0.22.3
+        e:
+            tjkt4nktqpn506qcyp25vx38smzt3ygg:
+                args:
+                    - --data_path
+                    - /home/zming/diffpose/6D/code/ArtImage-High-level/ArtImage
+                    - --sampling_steps
+                    - "100"
+                    - --batch_size
+                    - "96"
+                    - --eval_freq
+                    - "10"
+                    - --n_epochs
+                    - "200"
+                    - --seed
+                    - "0"
+                    - --cate_id
+                    - "1"
+                    - --saved_model_name
+                    - DFM_Train11.09
+                    - --pts_encoder
+                    - pointnet2
+                    - --is_train
+                codePath: runners/DFM_trainer.py
+                codePathLocal: runners/DFM_trainer.py
+                email: 1336146818@qq.com
+                executable: /home/zming/miniconda3/envs/DFM_pose/bin/python
+                git:
+                    commit: 6549157f8e8b480df4c89034433dda8b093d65a8
+                    remote: https://github.com/zming-Mei/DICArt.git
+                host: zming
+                os: Linux-6.8.0-64-generic-x86_64-with-glibc2.35
+                program: /home/zming/diffpose/6D/code/DICArt/runners/DFM_trainer.py
+                python: CPython 3.9.25
+                root: /home/zming/diffpose/6D/code/DICArt
+                startedAt: "2025-11-09T05:49:40.310218Z"
+                writerId: tjkt4nktqpn506qcyp25vx38smzt3ygg
+        m: []
+        python_version: 3.9.25
+        t:
+            "1":
+                - 1
+                - 5
+                - 37
+                - 41
+                - 51
+                - 53
+                - 82
+            "2":
+                - 1
+                - 5
+                - 37
+                - 41
+                - 51
+                - 53
+                - 82
+            "3":
+                - 16
+            "4": 3.9.25
+            "5": 0.22.3
+            "12": 0.22.3
+            "13": linux-x86_64
+batch_size:
+    value: 96
+encoder:
+    value: pointnet2
+learning_rate:
+    value: 0.0003
+n_epochs:
+    value: 200
+num_bins:
+    value: 360

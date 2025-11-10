@@ -1,0 +1,38 @@
+{
+  "os":  "Linux-6.8.0-64-generic-x86_64-with-glibc2.35",
+  "python":  "CPython 3.9.25",
+  "startedAt":  "2025-11-08T16:56:18.393211Z",
+  "args":  [
+    "--data_path",
+    "/home/zming/diffpose/6D/code/ArtImage-High-level/ArtImage",
+    "--sampling_steps",
+    "100",
+    "--batch_size",
+    "96",
+    "--eval_freq",
+    "10",
+    "--n_epochs",
+    "200",
+    "--seed",
+    "0",
+    "--cate_id",
+    "1",
+    "--saved_model_name",
+    "Train11.17",
+    "--pts_encoder",
+    "pointnet2",
+    "--is_train"
+  ],
+  "program":  "/home/zming/diffpose/6D/code/DICArt/runners/DICArt_trainer.py",
+  "codePath":  "runners/DICArt_trainer.py",
+  "codePathLocal":  "runners/DICArt_trainer.py",
+  "git":  {
+    "remote":  "https://github.com/zming-Mei/DICArt.git",
+    "commit":  "6549157f8e8b480df4c89034433dda8b093d65a8"
+  },
+  "email":  "1336146818@qq.com",
+  "root":  "/home/zming/diffpose/6D/code/DICArt",
+  "host":  "zming",
+  "executable":  "/home/zming/miniconda3/envs/DFM/bin/python",
+  "writerId":  "mk3ansbvnh0j8o6y60li2ilml1bxqqtz"
+}

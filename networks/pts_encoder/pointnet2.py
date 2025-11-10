@@ -205,7 +205,7 @@ class Pointnet2ClsMSG(nn.Module):
 
         l_xyz, l_features = [xyz], [features]
         for i in range(len(self.SA_modules)):
-            li_xyz, li_features = self.SA_modules[i](l_xyz[i], l_features[i]) # 每次都用前一次的结果作为输入，类似于将好几个Model串联了
+            li_xyz, li_features = self.SA_modules[i](l_xyz[i], l_features[i])
             l_xyz.append(li_xyz)
             l_features.append(li_features)
         return l_features[-1].squeeze(-1)   # [64,1024,1]  ->  [64,1024]

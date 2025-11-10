@@ -7,6 +7,8 @@ __pycache__/
 venv/
 ENV/
 env/
+/DiscreteFlow_6D
+/D3PM_6D
 .venv/
 .vscode/
 .idea/

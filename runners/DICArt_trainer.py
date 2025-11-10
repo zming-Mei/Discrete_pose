@@ -117,8 +117,9 @@ class D3PMTrainer:
 
         gt_pose = torch.cat([discretized_euler, trans_bins], dim=1)
         y = gt_pose.to(self.device)
-        
+
         pts_feat = self.model.extract_pts_feature(batch_sample).to(self.device)
+
         loss,loss_description = self.model.loss(y, pts_feat)
         self.optimizer.zero_grad()
         loss.backward()
@@ -167,12 +168,12 @@ def train_data(cfg, train_loader, val_loader, test_loader,trans_stats):
 
         pbar = tqdm(train_loader, desc=f"Epoch {epoch}")
         train_losses = []
-        
+
         for batch in pbar:
+  
             batch = process_batch(batch, cfg.device, cfg.pose_mode, mini_batch_size=96, PTS_AUG_PARAMS=None)
             loss,loss_description = trainer.train_step(batch)
             train_losses.append(loss)
-            
             pbar.set_postfix({
                 "Loss": f"{loss:.4f}",  
                 "Details": loss_description   
@@ -180,7 +181,7 @@ def train_data(cfg, train_loader, val_loader, test_loader,trans_stats):
             
         avg_train_loss = np.mean(train_losses)
         wandb.log({"epoch": epoch, "train_loss": avg_train_loss})
-        
+
         trainer.model.eval()
         eval_freq = cfg.eval_freq
         if (epoch + 1) % eval_freq == 0:
@@ -326,6 +327,7 @@ def main():
 
     if not (cfg.eval or cfg.pred):
         train_data(cfg, train_loader, val_loader,test_loader,trans_stats)
+
     else:
         Test_data(cfg,test_loader=test_loader,trans_stats=trans_stats)
             

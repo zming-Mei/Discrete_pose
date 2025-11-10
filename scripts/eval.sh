@@ -1,4 +1,4 @@
-CUDA_VISIBLE_DEVICES="0" python DICArt/runners/DICArt_eval.py \
+CUDA_VISIBLE_DEVICES="0" python runners/DICArt_eval.py \
 --data_path ArtImage-High-level/ArtImage \
 --sampling_steps 100 \
 --batch_size 96 \

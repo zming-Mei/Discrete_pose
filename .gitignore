@@ -9,6 +9,7 @@ ENV/
 env/
 /DiscreteFlow_6D
 /D3PM_6D
+/wandb
 .venv/
 .vscode/
 .idea/

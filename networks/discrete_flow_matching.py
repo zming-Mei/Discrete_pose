@@ -72,16 +72,20 @@ class ResidualBlock(nn.Module):
             return self.proj(x) + self.net(x)
         
 class DiscreteFlowMatching(nn.Module):
-    def __init__(self, cfg, num_bins=360, device='cuda'):
+    def __init__(self, cfg, device='cuda'):
         super().__init__()
         self.cfg = cfg
-        self.num_bins = num_bins
+        self.num_bins = cfg.num_bins
         self.angle_dimensions = 3
         self.translation_dimensions = 3
         self.num_dimensions = self.angle_dimensions + self.translation_dimensions
         self.device = device
         self.eps = 1e-8
-        self.time_epsilon = 1e-3 
+        
+        # Loss weights (following discrete diffusion model configuration)
+        self.mse_weight = 0.01
+        self.kl_weight = 0.2
+        self.L1_weight = 1
 
         # Initialize flow matching components
         scheduler = PolynomialConvexScheduler(n=1.5)  # Polynomial scheduler with n=1
@@ -108,7 +112,7 @@ class DiscreteFlowMatching(nn.Module):
 
         # Flow matching predicts posterior p(x_1|x_t) which will be converted to velocity
         self.mlp_shared = nn.Sequential(
-            nn.Linear(self.num_dimensions*num_bins + 256 + 1024, 1024),
+            nn.Linear(self.num_dimensions*self.num_bins + 256 + 1024, 1024),
             nn.LayerNorm(1024),
             nn.SiLU(),
             nn.Dropout(p=0.1),
@@ -147,7 +151,7 @@ class DiscreteFlowMatching(nn.Module):
                 nn.Linear(256, 256),
                 nn.BatchNorm1d(256),
                 nn.SiLU(),
-                nn.Linear(256, num_bins)
+                nn.Linear(256, self.num_bins)
             ) for _ in range(self.angle_dimensions)
         ]).to(device)
 
@@ -156,7 +160,7 @@ class DiscreteFlowMatching(nn.Module):
                 nn.Linear(256, 256),
                 nn.BatchNorm1d(256),
                 nn.SiLU(),
-                nn.Linear(256, num_bins)
+                nn.Linear(256, self.num_bins)
             ) for _ in range(self.translation_dimensions)
         ]).to(device)
 
@@ -201,10 +205,6 @@ class DiscreteFlowMatching(nn.Module):
 
         # Stack logits: [bs, num_dimensions, num_bins]
         posterior_logits = torch.stack(angle_logits + trans_logits, dim=1)
-
-        # Clamp logits to prevent numerical instability
-        posterior_logits = torch.clamp(posterior_logits, min=-10.0, max=10.0)
-
         return posterior_logits
 
 
@@ -220,7 +220,8 @@ class DiscreteFlowMatching(nn.Module):
                 # x: [batch_size, num_dimensions]
                 # t: [batch_size] or scalar
                 # cond: [batch_size, 1024]
-                return self.model.model_predict(x, t, self.cond)
+                logits = self.model.model_predict(x, t, self.cond)
+                return torch.softmax(logits, dim=-1)
 
         # Initialize solver
         model_wrapper = FlowMatchingWrapper(self, pts_feat)
@@ -238,24 +239,20 @@ class DiscreteFlowMatching(nn.Module):
         result = solver.sample(
             x_init=x_init,
             step_size=step_size,
-            time_grid=torch.tensor([0.0, 1.0-self.time_epsilon], device=self.device)
+            time_grid=torch.tensor([0.0, 1.0], device=self.device)
         )
-
-        # Clamp result to valid bin range to prevent out-of-bounds values
-        result = torch.clamp(result, 0, self.num_bins - 1)
 
         return result 
     
 
     def loss(self, x_1, pts_feat):
-        """Flow matching loss using generalized KL divergence"""
+        """Flow matching loss using mixed MSE + GeneralizedKL divergence"""
         cond = pts_feat
         bs = x_1.shape[0]
 
-
+        time_epsilon = 1e-3 
         # Sample time t uniformly from [0,1]
-        t = torch.rand(bs, device=self.device) * (1.0 - self.time_epsilon)
-
+        t = torch.rand(bs, device=self.device) * (1.0 - time_epsilon)
         # Sample x_0 from uniform distribution (source distribution)
         x_0 = self.sample_noise(bs)
 
@@ -266,8 +263,8 @@ class DiscreteFlowMatching(nn.Module):
         # Predict posterior logits p(x_1|x_t)
         posterior_logits = self.model_predict(x_t, t, cond)
 
-        # Compute flow matching loss
-        loss = self.criterion(
+        # Compute GeneralizedKL loss (following discrete diffusion model)
+        kl_loss = self.criterion(
             logits=posterior_logits,
             x_1=x_1,
             x_t=x_t,
@@ -282,13 +279,28 @@ class DiscreteFlowMatching(nn.Module):
         trans_x1 = x_1[:, self.angle_dimensions:]
         trans_xt = x_t[:, self.angle_dimensions:]
 
-        angle_loss = self.criterion(angle_logits, angle_x1, angle_xt, t)
-        trans_loss = self.criterion(trans_logits, trans_x1, trans_xt, t)
+        angle_kl_loss = self.criterion(angle_logits, angle_x1, angle_xt, t)
+        trans_kl_loss = self.criterion(trans_logits, trans_x1, trans_xt, t)
+
+        # Compute MSE loss (following discrete diffusion model implementation)
+        # Convert softmax probabilities to expected bin values
+        probs = F.softmax(posterior_logits, dim=-1)  # [bs, num_dimensions, num_bins]
+        bin_indices = torch.arange(self.num_bins, device=probs.device).float()  # [num_bins]
+        pred_bins = torch.sum(probs * bin_indices, dim=-1)  # [bs, num_dimensions]
+        true_bins = x_1.float()  # [bs, num_dimensions]
+        
+        mse_loss = F.mse_loss(pred_bins, true_bins)
+        L1_loss = F.l1_loss(pred_bins, true_bins)
+
+        # Combined loss (following discrete diffusion model weight configuration)
+        total_loss = self.kl_weight * kl_loss + self.mse_weight * mse_loss + self.L1_weight * L1_loss
 
         loss_description = (
-            f"Flow Loss: {loss:.4f}, "
-            f"Angle Loss: {angle_loss:.4f}, "
-            f"Translation Loss: {trans_loss:.4f}"
+            f"KL Loss: {self.kl_weight * kl_loss:.4f}, "
+            f"MSE Loss: {self.mse_weight * mse_loss:.4f}, "
+            f"L1 Loss: {self.L1_weight * L1_loss:.4f}, "
+            f"Angle KL: {angle_kl_loss:.4f}, "
+            f"Trans KL: {trans_kl_loss:.4f}"
         )
 
-        return loss, loss_description
+        return total_loss, loss_description

@@ -221,7 +221,6 @@ def main():
         -0.4042277932167053, 0.39954620599746704,
         -0.30842161178588867, 0.7598943710327148
     ]
-    #trans_stats = get_dataset_translation_min_max(train_loader, cfg)
     
     # Run evaluation
     evaluate_model(cfg, test_loader, trans_stats)

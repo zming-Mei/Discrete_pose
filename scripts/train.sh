@@ -1,5 +1,5 @@
 CUDA_VISIBLE_DEVICES="0" python runners/DFM_trainer.py \
---data_path /home/zming/diffpose/6D/code/ArtImage-High-level/ArtImage \
+--data_path ../ArtImage-High-level/ArtImage \
 --sampling_steps 100 \
 --batch_size 96 \
 --total_steps 50000 \
@@ -12,7 +12,6 @@ CUDA_VISIBLE_DEVICES="0" python runners/DFM_trainer.py \
 --cate_id 1 \
 --saved_model_name DFM_Train11.09 \
 --pts_encoder pointnet2 \
-#--pretrained_model_path /home/zming/diffpose/6D/code/DICArt/DiscreteFlow_6D_KL/epoch_model_epoch_289_angle_diff_18.2792_trans_diff_0.0899.pt \
 --is_train  
 
 

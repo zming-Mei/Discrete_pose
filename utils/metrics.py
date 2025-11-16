@@ -178,7 +178,7 @@ def get_metrics(pose_1, pose_2, class_ids, synset_names, pose_mode, o2c_pose=Fal
     RT_1 = torch.eye(4).unsqueeze(0).repeat([bs, 1, 1])
     RT_2 = torch.eye(4).unsqueeze(0).repeat([bs, 1, 1])
     
-    RT_1[:, :3, :3] = rot_matrix_1   # 存储旋转矩阵和平移矩阵
+    RT_1[:, :3, :3] = rot_matrix_1   # store rotation matrix and translation matrix
     RT_1[:, :3, 3] = trans_1
     RT_2[:, :3, :3] = rot_matrix_2
     RT_2[:, :3, 3] = trans_2

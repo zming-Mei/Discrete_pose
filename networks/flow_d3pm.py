@@ -346,7 +346,7 @@ class D3PM_Flow(nn.Module):
 
 
     def sample(self, pts_feat, steps=1000):
-        cond = pts_feat  # 直接使用 [bs, 1024]
+        cond = pts_feat  # directly use [bs, 1024]
         bs = pts_feat.shape[0]
         y_t = torch.randint(0, self.num_bins, (bs, self.num_dimensions), device=self.device)
         for step in reversed(range(1, steps)):

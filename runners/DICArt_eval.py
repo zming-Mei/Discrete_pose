@@ -100,7 +100,7 @@ class D3PMTrainer:
                     eta_min=1e-6 
                 )
             ],
-            milestones=[int(cfg.n_epochs * 0.4)]  # 中间切换点
+            milestones=[int(cfg.n_epochs * 0.4)]  # midpoint for scheduler transition
         )
         # self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         #     self.optimizer,

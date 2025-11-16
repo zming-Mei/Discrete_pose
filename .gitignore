@@ -7,9 +7,10 @@ __pycache__/
 venv/
 ENV/
 env/
-/DiscreteFlow_6D
+/ckpts
 /D3PM_6D
 /wandb
+/tools
 .venv/
 .vscode/
 .idea/

@@ -5,12 +5,10 @@ import random
 import sys
 import copy
 sys.path.insert(0,os.getcwd())
-sys.path.append('path/to/your/projectDICArt')
 import mmengine
 import numpy as np
 import _pickle as cPickle
 from configs.config import get_config
-import numpy as np
 # from config.config import *
 # from datasets.data_augmentation import defor_2D, get_rotation
 # FLAGS = flags.FLAGS
@@ -27,176 +25,8 @@ from utils.datasets_utils import *
 from pycocotools import mask as maskUtils
 from datasets.dataset_Generator import SapienDataset_KPAGen
 import os.path as osp
-from scipy.spatial.transform import Rotation
-import xml.etree.ElementTree as ET
 
 import json
-
-os.environ['GDK_BACKEND'] = 'x11'
-os.environ['QT_QPA_PLATFORM'] = 'xcb' 
-os.environ['SDL_VIDEODRIVER'] = 'x11'
-os.environ['XDG_SESSION_TYPE'] = 'x11'
-
-
-def validate_transformation(rotation_matrix, translation=None):
-    print("=== Transformation Validation ===")
-    
-    standard_z = np.array([0, 0, 1])
-    print(f"Standard space reference vector: {standard_z}")
-    
-    R = np.array(rotation_matrix)
-    R_inv = R.T
-    
-    camera_z = R @ standard_z
-    recovered_z = R_inv @ camera_z
-    
-    error_rotation = np.linalg.norm(recovered_z - standard_z)
-    print(f"Rotation matrix error: {error_rotation:.6f}")
-    
-    if translation is not None:
-        t = np.array(translation).reshape(3)
-        
-        point_standard = np.array([0.1, 0.2, 0.3])
-        
-        point_camera = R @ point_standard + t
-        
-        point_recovered = R_inv @ (point_camera - t)
-        
-        error_translation = np.linalg.norm(point_recovered - point_standard)
-        print(f"Complete transformation error: {error_translation:.6f}")
-    
-    return error_rotation
-
-def vis_cloud(
-    describe: str = None, 
-    key_dis=None, 
-    p1=None, p2=None, 
-    ax=None, 
-    cloud_trans=None, 
-    cloud_canonical=None, 
-    cloud_camera=None, 
-    normals=None,
-    normals_origin=None,
-    rotation_matrix=None,
-    normals_color=[1, 0.5, 0],
-    rot_origin=[0.5, 0, 0],
-    rot_colors=[[0, 1, 1], [1, 0, 1], [1, 1, 0]],
-    is_display=True
-):
-    if not is_display:
-        return
-    if describe:
-        print(describe)
-
-    vis_lst = []
-
-    if p1 is not None:
-        p1 = np.array(p1)
-        sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.01)
-        sphere.translate(p1)
-        sphere.paint_uniform_color([0, 0, 0])
-        vis_lst.append(sphere)
-
-    if p1 is not None and (ax is not None or p2 is not None):
-        line_pcd = o3d.geometry.LineSet()
-        if p2 is None:
-            p2 = p1 + ax
-        p1 = np.array(p1).reshape(3)
-        p2 = np.array(p2).reshape(3)
-        lines = np.array([[0, 1]])
-        points = np.vstack([p1, p2])
-        colors = [[0, 0, 1] for i in range(len(lines))]
-        line_pcd.points = o3d.utility.Vector3dVector(points)
-        line_pcd.lines = o3d.utility.Vector2iVector(lines)
-        line_pcd.colors = o3d.utility.Vector3dVector(colors)
-        vis_lst.append(line_pcd)
-
-    if cloud_canonical is not None:
-        if cloud_canonical.shape[0] == 2:
-            cloud_canonical = np.concatenate(cloud_canonical,axis=0)
-        point_pcd = o3d.geometry.PointCloud()
-        point_pcd.points = o3d.utility.Vector3dVector(cloud_canonical)
-        point_pcd.paint_uniform_color([1, 0, 0])
-        vis_lst.append(point_pcd)
-    if cloud_camera is not None:
-        if cloud_camera.shape[0] == 2:
-            cloud_camera = np.concatenate(cloud_camera,axis=0)
-        point_pcd = o3d.geometry.PointCloud()
-        point_pcd.points = o3d.utility.Vector3dVector(cloud_camera)
-        point_pcd.paint_uniform_color([0, 0, 1])
-        vis_lst.append(point_pcd)
-    if cloud_trans is not None:
-        if cloud_trans.shape[0] == 2:
-            cloud_trans = np.concatenate(cloud_trans,axis=0)
-        point_pcd = o3d.geometry.PointCloud()
-        point_pcd.points = o3d.utility.Vector3dVector(cloud_trans)
-        point_pcd.paint_uniform_color([1, 0, 1])
-        vis_lst.append(point_pcd)
-
-    axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.3,origin=[0.0, 0.0, 0.0])
-    vis_lst.append(axis)
-
-    if normals is not None:
-        normals = np.array(normals)
-        if normals.ndim == 1:
-            normals = normals.reshape(1, 3)
-        
-        if normals_origin is None:
-            if cloud_canonical is not None:
-                normals_origin = cloud_canonical[:len(normals)]
-                print('normals:', normals)
-            else:
-                normals_origin = np.array([[0.2, 0.2, 0.2]] * len(normals))
-        
-        normals_origin = np.array(normals_origin).reshape(-1, 3)
-        scale = 1
-        normals_scaled = normals * scale
-        
-        line_pcd = o3d.geometry.LineSet()
-        points = np.vstack([normals_origin, normals_origin + normals_scaled])
-        lines = np.array([[i, i + len(normals)] for i in range(len(normals))])
-        colors = [normals_color for _ in range(len(lines))]
-        
-        line_pcd.points = o3d.utility.Vector3dVector(points)
-        line_pcd.lines = o3d.utility.Vector2iVector(lines)
-        line_pcd.colors = o3d.utility.Vector3dVector(colors)
-        vis_lst.append(line_pcd)
-
-    if rotation_matrix is not None:
-        rot_matrix = np.array(rotation_matrix)
-        print('rot_matrix:', rot_matrix)
-        if rot_matrix.shape != (3, 3):
-            raise ValueError("Rotation matrix must be 3x3 array")
-        x_axis = rot_matrix[:, 0]
-        y_axis = rot_matrix[:, 1]
-        z_axis = rot_matrix[:, 2]
-        
-        rot_origin = normals_origin
-        
-        scale = 0.5
-        x_end = rot_origin + x_axis * scale
-        y_end = rot_origin + y_axis * scale
-        z_end = rot_origin + z_axis * scale
-        
-        line_pcd = o3d.geometry.LineSet()
-        points = np.vstack([rot_origin, x_end, y_end, z_end])
-        lines = np.array([[0, 1], [0, 2], [0, 3]])
-        colors = rot_colors
-        
-        line_pcd.points = o3d.utility.Vector3dVector(points)
-        line_pcd.lines = o3d.utility.Vector2iVector(lines)
-        line_pcd.colors = o3d.utility.Vector3dVector(colors)
-        vis_lst.append(line_pcd)
-
-    vis = o3d.visualization.Visualizer()
-    vis.create_window(window_name='Open3D', width=800, height=600)
-    for v in vis_lst:
-        vis.add_geometry(v)
-    vis.run()
-    vis.destroy_window()
-    if key_dis:
-        print(f"key_dis={key_dis} Point cloud visualization complete!")
-
 
 class PoseDataset(data.Dataset):
     CLASSES = ('background', 'laptop', 'eyeglasses', 'dishwasher', 'drawer', 'scissors')
@@ -241,6 +71,7 @@ class PoseDataset(data.Dataset):
         #self.length=len(json_list)
 
         
+        # Training samples
         self.img_list=[]
         
         for path in img_list_path:
@@ -249,181 +80,37 @@ class PoseDataset(data.Dataset):
             
 
         self.length = len(self.img_list)
+
+        # self.intrinsics = np.array([[914, 0, 0], [0, 914, 0], [320, 320, 1]],  # camera intrinsic parameters
+        #                                   dtype=np.float)  # [fx, fy, cx, cy]
            
      
         #self.real_intrinsics = np.array([[591.0125, 0, 322.525], [0, 590.16775, 244.11084], [0, 0, 1]], dtype=np.float)
         self.camera_intrinsics = o3d.io.read_pinhole_camera_intrinsic(osp.join(self.data_dir,'camera_intrinsic.json'))
 
-        # print('{}: {} jsons found.'.format(mode,self.length))
+        print('{}: {} jsons found.'.format(mode,self.length))
         
 
     def __len__(self):
         return self.length
-    
-    def estimate_normals(self, pc, knn=60):
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(pc)
-        pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamKNN(knn=knn))
-        return np.array(pcd.normals)
-    
-    def get_urdf_mobility(self, dir, filename='mobility_for_unity_align.urdf'):
-        urdf_ins = {}
-        tree_urdf = ET.parse(os.path.join(dir, filename))
-        num_real_links = len(tree_urdf.findall('link'))
-        root_urdf = tree_urdf.getroot()
-
-        rpy_xyz = {}
-        list_type = [None] * (num_real_links - 1)
-        list_parent = [None] * (num_real_links - 1)
-        list_child = [None] * (num_real_links - 1)
-        list_xyz = [None] * (num_real_links - 1)
-        list_rpy = [None] * (num_real_links - 1)
-        list_axis = [None] * (num_real_links - 1)
-        list_limit = [[0, 0]] * (num_real_links - 1)
-        for joint in root_urdf.iter('joint'):
-            joint_index = int(joint.attrib['name'].split('_')[1])
-            list_type[joint_index] = joint.attrib['type']
-
-            for parent in joint.iter('parent'):
-                link_name = parent.attrib['link']
-                if link_name == 'base':
-                    link_index = 0
-                else:
-                    # link_index = int(link_name.split('_')[1]) + 1
-                    link_index = int(link_name) + 1
-                list_parent[joint_index] = link_index
-            for child in joint.iter('child'):
-                link_name = child.attrib['link']
-                if link_name == 'base':
-                    link_index = 0
-                else:
-                    # link_index = int(link_name.split('_')[1]) + 1
-                    link_index = int(link_name) + 1
-                list_child[joint_index] = link_index
-            for origin in joint.iter('origin'):
-                if 'xyz' in origin.attrib:
-                    list_xyz[joint_index] = [float(x) for x in origin.attrib['xyz'].split()]
-                else:
-                    list_xyz[joint_index] = [0, 0, 0]
-                if 'rpy' in origin.attrib:
-                    list_rpy[joint_index] = [float(x) for x in origin.attrib['rpy'].split()]
-                else:
-                    list_rpy[joint_index] = [0, 0, 0]
-            for axis in joint.iter('axis'):  # we must have
-                list_axis[joint_index] = [float(x) for x in axis.attrib['xyz'].split()]
-            for limit in joint.iter('limit'):
-                list_limit[joint_index] = [float(limit.attrib['lower']), float(limit.attrib['upper'])]
-
-        rpy_xyz['type'] = list_type
-        rpy_xyz['parent'] = list_parent
-        rpy_xyz['child'] = list_child
-        rpy_xyz['xyz'] = list_xyz
-        rpy_xyz['rpy'] = list_rpy
-        rpy_xyz['axis'] = list_axis
-        rpy_xyz['limit'] = list_limit
-
-        urdf_ins['joint'] = rpy_xyz
-        urdf_ins['num_links'] = num_real_links
-
-        return urdf_ins
-    
-    def compose_rt(self, rotation, translation):
-        aligned_RT = np.zeros((4, 4), dtype=np.float32)
-        aligned_RT[:3, :3] = rotation[:3, :3]
-        aligned_RT[:3, 3] = translation
-        aligned_RT[3, 3] = 1
-        return aligned_RT
-        
-    def parse_joint_info(self, urdf_id, urdf_file, rest_state_json, compute_relative=False):
-        # support kinematic tree depth > 2
-        tree = ET.parse(urdf_file)
-        root_urdf = tree.getroot()
-        rest_transformation_dict = dict()
-        joint_loc_dict = dict()
-        joint_axis_dict = dict()
-        for i, joint in enumerate(root_urdf.iter('joint')):
-            if joint.attrib['type'] == 'fixed' or joint.attrib['type'] == '0':
-                continue
-            child_name = joint.attrib['name'].split('_')[-1]
-            for origin in joint.iter('origin'):
-                x, y, z = [float(x) for x in origin.attrib['xyz'].split()][::-1]
-                a, b, c = y, x, z
-                joint_loc_dict[int(child_name)] = np.array([a, b, c])
-            for axis in joint.iter('axis'):
-                r, p, y = [float(x) for x in axis.attrib['xyz'].split()][::-1]
-                axis = np.array([p, r, y])
-                axis /= np.linalg.norm(axis)
-                u, v, w = axis
-                joint_axis_dict[int(child_name)] = np.array([u, v, w])
-            if joint.attrib['type'] == 'prismatic':
-                delta_state = rest_state_json[str(urdf_id)][child_name]['state']
-                delta_transform = np.concatenate([np.concatenate([np.eye(3), np.array([[u*delta_state, v*delta_state, w*delta_state]]).T],
-                                                    axis=1), np.array([[0., 0., 0., 1.]])], axis=0)
-            elif joint.attrib['type'] == 'revolute':
-                if str(urdf_id) in rest_state_json:
-                    delta_state = -rest_state_json[str(urdf_id)][child_name]['state'] / 180 * np.pi
-                else:
-                    delta_state = 0.
-                cos = np.cos(delta_state)
-                sin = np.sin(delta_state)
-
-                delta_transform = np.concatenate(
-                    [np.stack([u * u + (v * v + w * w) * cos, u * v * (1 - cos) - w * sin, u * w * (1 - cos) + v * sin,
-                                    (a * (v * v + w * w) - u * (b * v + c * w)) * (1 - cos) + (b * w - c * v) * sin,
-                                    u * v * (1 - cos) + w * sin, v * v + (u * u + w * w) * cos, v * w * (1 - cos) - u * sin,
-                                    (b * (u * u + w * w) - v * (a * u + c * w)) * (1 - cos) + (c * u - a * w) * sin,
-                                    u * w * (1 - cos) - v * sin, v * w * (1 - cos) + u * sin, w * w + (u * u + v * v) * cos,
-                                    (c * (u * u + v * v) - w * (a * u + b * v)) * (1 - cos) + (a * v - b * u) * sin]).reshape(
-                        3, 4),
-                        np.array([[0., 0., 0., 1.]])], axis=0)
-            rest_transformation_dict[int(child_name)] = delta_transform
-        if not compute_relative:
-            return rest_transformation_dict, joint_loc_dict, joint_axis_dict
-        else:
-            # support structure with more than 1 depth
-            urdf_dir = os.path.dirname(urdf_file)
-            urdf_ins_old = self.get_urdf_mobility(urdf_dir, filename='mobility_for_unity.urdf')
-            urdf_ins_new = self.get_urdf_mobility(urdf_dir, filename='mobility_for_unity_align.urdf')
-
-            joint_old_rpy_base = [-urdf_ins_old['joint']['rpy'][0][0], urdf_ins_old['joint']['rpy'][0][2],
-                                    -urdf_ins_old['joint']['rpy'][0][1]]
-            joint_old_xyz_base = [-urdf_ins_old['joint']['xyz'][0][0], urdf_ins_old['joint']['xyz'][0][2],
-                                    -urdf_ins_old['joint']['xyz'][0][1]]
-            joint_new_rpy_base = [-urdf_ins_new['joint']['rpy'][0][0], urdf_ins_new['joint']['rpy'][0][2],
-                                    -urdf_ins_new['joint']['rpy'][0][1]]
-            joint_new_xyz_base = [-urdf_ins_new['joint']['xyz'][0][0], urdf_ins_new['joint']['xyz'][0][2],
-                                    -urdf_ins_new['joint']['xyz'][0][1]]
-
-            joint_rpy_relative = np.array(joint_new_rpy_base) - np.array(joint_old_rpy_base)
-            joint_xyz_relative = np.array(joint_new_xyz_base) - np.array(joint_old_xyz_base)
-
-            transformation_base_relative = self.compose_rt(
-                Rotation.from_euler('ZXY', joint_rpy_relative.tolist()).as_matrix(), joint_xyz_relative)
-
-            for child_name in rest_transformation_dict.keys():
-                rest_transformation_dict[child_name] = transformation_base_relative @ rest_transformation_dict[
-                    child_name]
-            rest_transformation_dict[0] = transformation_base_relative
-
-            for child_name in joint_loc_dict:
-                # support kinematic tree depth > 2
-                homo_joint_loc = np.concatenate([joint_loc_dict[child_name], np.ones(1)], axis=-1)
-                joint_loc_dict[child_name] = (rest_transformation_dict[0] @ homo_joint_loc.T).T[:3]
-                joint_axis_dict[child_name] = (rest_transformation_dict[0][:3, :3] @ joint_axis_dict[child_name].T).T
-
-            return rest_transformation_dict, joint_loc_dict, joint_axis_dict
 
     def __getitem__(self, index):
+        #  load ground truth
+        #  if per_obj is specified, then we only select the target object
+        # index = index % self.length  # here something wrong
+
+        # index=str(index).zfill(6)
         thres_r = 0.5
 
         try:
-            json_path = os.path.join(self.data_dir, self.CLASSES[self.cate_id],'train',
+            img_path = os.path.join(self.data_dir, self.CLASSES[self.cate_id],'train',
                                     'annotations','{}'.format(self.img_list[index]))
          
-            annotation=mmengine.load(json_path)
+            annotation=mmengine.load(img_path)  # mmengine.load is a wrapped file reading interface
      
         except:
             print('json is not in the train.txt')
+        
 
 
         rgb_path=osp.join(self.data_dir,self.CLASSES[self.cate_id],'train',annotation['color_path'])
@@ -437,16 +124,15 @@ class PoseDataset(data.Dataset):
         instances=annotation['instances']
         # instances_info = instances[0]
         assert len(instances) == 1, 'Only support one instance per image'
-        urdf_id = annotation['instances'][0]['urdf_id'] 
 
-       
-        
-        urdf_id = annotation['instances'][0]['urdf_id']
-        joint_para_path = osp.join(self.data_dir,self.CLASSES[self.cate_id],'urdf',str(urdf_id),'joint_infos.json')
+        # Load urdf and key information
+        urdf_id = annotation['instances'][0]['urdf_id']    # different urdf represents different laptops
+        joint_para_path = osp.join(self.data_dir,self.CLASSES[self.cate_id],'urdf',str(urdf_id),'joint_infos.json')  # Load axis information (axis point, axis direction)
         joint_annotation = mmengine.load(joint_para_path)
 
-        joint_state = [0. for _ in range(self.num_parts-1)]
+        joint_state = [0. for _ in range(self.num_parts-1)]  # axis angle
         joint_para = [[[0 for _ in range(3)] for _ in range(2)] for _ in range(self.joint_num)]  
+
         """
         if self.cate_id == 2:
             for idx in range(self.num_parts-1):
@@ -456,19 +142,18 @@ class PoseDataset(data.Dataset):
             for part_id in range(self.num_parts-1):
                 joint_state[part_id] = annotation['instances'][0]['links'][part_id+1]['state']
         """
-        import numpy as np
         for idx in range(self.num_parts-1):
             link_category_id = annotation['instances'][0]['links'][idx+1]['link_category_id']-1
-            joint_state[link_category_id] = annotation['instances'][0]['links'][idx+1]['state']
-        joint_state = np.array(joint_state)
+            joint_state[link_category_id] = annotation['instances'][0]['links'][idx+1]['state']  # take idx+1 because basepart has no state (angle)
+        joint_state = np.array(joint_state)  # load state for each axis
 
         joint_xyz = []
         co_xyz = []
         joint_rpy = []
         joint_id = 0
-        for key in sorted(joint_annotation.keys()):
-            joint_para[joint_id][0] = joint_annotation[key]['xyz']
-            joint_para[joint_id][1] = joint_annotation[key]['rpy']
+        for key in sorted(joint_annotation.keys()):   # key is a number, save axis information one by one in order
+            joint_para[joint_id][0] = joint_annotation[key]['xyz']   # axis point
+            joint_para[joint_id][1] = joint_annotation[key]['rpy']   # axis direction
             co_xyz.append(joint_annotation[key]['xyz'])
             joint_xyz.append(joint_annotation[key]['xyz'])
             joint_rpy.append(joint_annotation[key]['rpy'])
@@ -476,148 +161,78 @@ class PoseDataset(data.Dataset):
         joint_id = 0
 
         co_xyz = np.array(co_xyz)
-        joint_para_xyz = np.array(joint_xyz)
-        joint_para_xyz = joint_para_xyz.reshape(-1)
-        joint_para_rpy = np.array(joint_rpy)
-        joint_para_rpy = joint_para_rpy.reshape(-1)
+        joint_para_xyz = np.array(joint_xyz)  # load xyz and rpy for each axis
+        joint_para_xyz = joint_para_xyz.reshape(-1)  # convert to 1D for easier processing
+        joint_para_rpy = np.array(joint_rpy)  # load xyz and rpy for each axis
+        joint_para_rpy = joint_para_rpy.reshape(-1)  # convert to 1D for easier processing
         
-        joint_para = np.array(joint_para)
-        joint_para = joint_para.reshape(-1)
+        joint_para = np.array(joint_para)  # load xyz and rpy for each axis
+        joint_para = joint_para.reshape(-1)  # convert to 1D for easier processing
             
         var = 10
         if self.cate_id == 4:
             joint_state = joint_state*4
         else:
             joint_state = joint_state / var
-
-        import json
-
-        urdf_dir = "path/to/your/projectdata/ArtImage-High-level/ArtImage/laptop/urdf"
-        with open(os.path.join(urdf_dir, 'rest_state.json'), 'r') as f:
-            rest_state_json = json.load(f)
-        new_urdf_file = 'path/to/your/projectdata/ArtImage-High-level/ArtImage/laptop/urdf/{}/mobility_for_unity_align.urdf'.format(urdf_id)
-        rest_transform, _,  _ = self.parse_joint_info(int(urdf_id), new_urdf_file, rest_state_json, False)
         
    
-        transformation=annotation['instances'][0]['links'][0]['transformation']
-        child_all_transformation=np.array(annotation['instances'][0]['links'][1]['transformation'])
-        child_all_transformation = child_all_transformation @ np.linalg.inv(rest_transform[1])
-        child_transformation=np.array(annotation['instances'][0]['links'][1]['transformation'])[:3,:3]
-        gt_parts_normals_canonical = child_all_transformation[:3,:3][:, 2]
+        transformation=annotation['instances'][0]['links'][0]['transformation']  # basepart
         transformation=np.array(transformation)
-       
-            
-        rotation = transformation[:3,:3]
-        translation = transformation[:3, 3]
+        
+        # Slice operation to extract transformation matrix
+        rotation = transformation[:3,:3]  # extract upper-left 3x3 rotation matrix
+        translation = transformation[:3, 3]  # extract right-side 3x1 translation vector
         link_info=annotation['instances'][0]['links']
 
+        # Point cloud
         pc_all_points = []
         pc_temps = []
         label_all = []
         pc_all = o3d.geometry.PointCloud()
-        parts_normals_canonical = [None] * cfg.num_parts
-      
+
         for part_id in range(self.num_parts):
             part_seg = link_info[part_id]['segmentation']
             rle = None
+
             try:
+                """
+                    maskUtils.frPyObjects 这个函数将其中的多边形（polygon）
+                    或未压缩的RLE（uncompressed RLE）转换为压缩的RLE格式，以便于后续的处理和分析。
+                """
+
                 rle = maskUtils.frPyObjects(part_seg, 640,640)
+
             except:
                 print(type(index))
                 print('index = ',index)
+            # if rle: 
+            #     mask = np.sum(maskUtils.decode(rle), axis=2).clip(max=1).astype(np.uint8)
+            # else:
+            #     pc_temps.append(None)
+            #     # pc_temps.append([[-1.0,-1.0,-1.0]])
+            #     continue
             mask = np.sum(maskUtils.decode(rle), axis=2).clip(max=1).astype(np.uint8)
+            # Generate RGB-D image
             color = o3d.geometry.Image(rgb * np.repeat(mask[..., np.newaxis], 3, 2))
             deep = o3d.geometry.Image(depth * mask)
             rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(color, deep, 1000.0, 20.0, convert_rgb_to_intensity=True)
+
+            # Generate point cloud
             pc_temp = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_image, self.camera_intrinsics)
+
             pc_temps.append(pc_temp)
             points_temp = np.asarray(pc_temp.points)
-        
-            from sklearn.decomposition import PCA
-            points = points_temp
-           
-            if len(points) < 3:
-                return self.__getitem__((index + 1) % len(self))  
-            if part_id == 1:
-                if os.path.exists(json_path):
-                    with open(json_path, 'r') as f:
-                        data = json.load(f)
-                if 'parts_normals_canonical' in data:
-                    parts_normals_canonical = np.array(data['parts_normals_canonical'])
-            
-                else:
-                    if part_id == 1:
-                        pca = PCA(n_components=2)
-                        pca.fit(points)
-                        X_projected = pca.transform(points)
-                        X_projected_back = pca.inverse_transform(X_projected)
-                        data_plane = X_projected_back.T
-                        all_normals = self.estimate_normals(data_plane.T)
-                        normal = np.mean(all_normals, axis=0) 
-                        normal = normal /  np.linalg.norm(normal)
-                        data['parts_normals_canonical'] = normal.tolist()
-                        parts_normals_canonical = normal
-                        with open(json_path, 'w') as f:
-                            json.dump(data, f, indent=4)
-        
-
-          
-            # if part_id == 1:
-            #     vis_cloud(cloud_canonical=points_temp, normals=normal, rotation_matrix=child_transformation)
-
             pc_all_points.append(points_temp)
 
+        pc = np.concatenate(pc_all_points)  # point cloud composed of all points
 
-        pc = np.concatenate(pc_all_points)
-        
-        
-        if np.dot(parts_normals_canonical, child_all_transformation[:3, :3][:, 2]) < 0:
-            parts_normals_canonical = -parts_normals_canonical
-
-        # point_0 = osp.join(self.data_dir,self.CLASSES[self.cate_id],'urdf',str(urdf_id),"part_point_sample_rest", "0.xyz")
-        # point_1 = osp.join(self.data_dir,self.CLASSES[self.cate_id],'urdf',str(urdf_id),"part_point_sample_rest", "1.xyz")
-        # pc_can = np.concatenate([np.loadtxt(point_0), np.loadtxt(point_1)], axis=0)
-        pc_m = np.concatenate(pc_all_points, axis=0)
-
-        import numpy as np
-
-        def sample_points_numpy(points, num_samples=1024):
-            if not isinstance(points, np.ndarray):
-                points = np.array(points)
-            
-            num_points = points.shape[0]
-            
-            if num_points >= num_samples:
-                indices = np.random.choice(num_points, num_samples, replace=False)
-                return points[indices]
-            else:
-                indices = np.random.choice(num_points, num_samples, replace=True)
-                return points[indices]
-
-
-        inv_transformation = np.linalg.inv(transformation)
-        data_dict = {}
-        data_dict['transformation'] = transformation
-
-        xyz_camera = pc_m
-        
-        data_dict['xyz_camera'] = [sample_points_numpy(pc_all_points[0]), sample_points_numpy(pc_all_points[1])]
-        
-
-        inv_child_all_transformation = np.linalg.inv(child_all_transformation)
-        pc_1 = np.dot(data_dict['xyz_camera'][0], inv_transformation[:3,:3].T) + inv_transformation[:3, 3]
-        pc_2 = np.dot(data_dict['xyz_camera'][1], inv_child_all_transformation[:3,:3].T) + inv_child_all_transformation[:3, 3]
-        pc_3 = np.concatenate([pc_1, pc_2], axis=0)
-        cad = pc_3
-        data_dict['cad'] = [pc_1, pc_2]
-
-
-        T_inv = np.linalg.inv(transformation)
-        parts_gts = [None] * cfg.num_parts  
-        
+        # Point cloud normalization
+        T_inv = np.linalg.inv(transformation)  # inverse of R
+        parts_gts = [None] * cfg.num_parts  # point cloud for each part
         for i in range(self.num_parts):
-            canonical = pc_temps[i].transform(T_inv)   
+            canonical = pc_temps[i].transform(T_inv)   # transform original point cloud to canonical space
             parts_gts[i] = np.asarray(canonical.points)  # [N, 3] 
+
         pc_canonical = np.concatenate(parts_gts)
 
         # vis_points = np.array(pc_canonical)
@@ -630,6 +245,7 @@ class PoseDataset(data.Dataset):
         parts_gt = [None] * (cfg.num_parts + cfg.joint_num - 1)
         mean_parts_gt = [None] * cfg.joint_num 
 
+        # Heatmap calculation
         for i in range(cfg.num_parts):
             if i == 0:
                 for j in range(cfg.joint_num):
@@ -637,7 +253,7 @@ class PoseDataset(data.Dataset):
                     offset_heatmap_arr = np.array(offset_heatmap[j])
                     indices = np.where(offset_heatmap_arr > 0)[0]
                     offset_heatmap_filtered[j] = offset_heatmap[j][offset_heatmap[j] > 0] 
-                    parts_gt[j] = parts_gts[i][indices]
+                    parts_gt[j] = parts_gts[i][indices]  # extract point cloud where heatmap > 0, i.e., points within a certain distance threshold
 
             else:
                 offset_heatmap[i+cfg.joint_num-1] = self.get_heatmap(joint_xyz[i-1], parts_gts[i], thres_r=thres_r)
@@ -649,24 +265,27 @@ class PoseDataset(data.Dataset):
                 parts_gt[i+cfg.joint_num-1] = parts_gts[i][indices]
 
                 mean_offset_heatmap[i-1] = np.concatenate([offset_heatmap_filtered[i+cfg.joint_num-1],offset_heatmap_filtered[i-1]])
-                mean_parts_gt[i-1] = np.concatenate([parts_gt[i+cfg.joint_num-1],parts_gt[i-1]])
+                mean_parts_gt[i-1] = np.concatenate([parts_gt[i+cfg.joint_num-1],parts_gt[i-1]])  # concatenate two parts
 
                 mean_offset_heatmap_arr = np.array(mean_offset_heatmap[i-1])
                
                 mean_offset_heatmap_arr_value = np.mean(mean_offset_heatmap_arr)
                 mean_offset_heatmap[i-1] = mean_offset_heatmap_arr_value
+                # mean_offset_heatmap[i-1] = np.mean(mean_offset_heatmap[i-1])
 
                 mean_parts_gt_arr = np.array(mean_parts_gt[i-1])
                 mean_parts_gt_arr_value = np.mean(mean_parts_gt_arr, axis=0)
                 mean_parts_gt[i-1] = mean_parts_gt_arr_value
+                # mean_parts_gt[i-1] = np.mean(mean_parts_gt[i-1], axis=0)
 
                 offset_unitvec[i-1] = joint_xyz[i-1] / mean_offset_heatmap_arr_value - mean_parts_gt_arr_value
+                # offset_unitvec[i-1] = joint_xyz[i-1] / mean_offset_heatmap[i-1] - mean_parts_gt[i-1]
 
 
 
-        offset_heatmap_gt = np.array(mean_offset_heatmap).reshape(-1)
-        offset_unitvec_gt = np.array(offset_unitvec).reshape(-1)
-        mean_parts_gt = np.array(mean_parts_gt).reshape(-1)
+        offset_heatmap_gt = np.array(mean_offset_heatmap).reshape(-1)  # [1,] average heatmap value of all points within threshold
+        offset_unitvec_gt = np.array(offset_unitvec).reshape(-1)       # [3,] average, axis point direction
+        mean_parts_gt = np.array(mean_parts_gt).reshape(-1)            # [3,] center point of point clouds on both sides of the axis
 
 
         """
@@ -700,9 +319,11 @@ class PoseDataset(data.Dataset):
 
 
         fsnet_scale, mean_shape_part,mean_shape = self.get_fs_net_scale_part(c=self.CLASSES[self.cate_id],urdf_id = urdf_id)
+        # bbox_dims_res = (bbox_dims - mean_shape)*0.3  # size of the whole object
 
         sym_info = self.get_sym_info_part(c=self.CLASSES[self.cate_id])
 
+        data_dict = {}
 
         bb_aug, rt_aug_t, rt_aug_R = self.generate_aug_parameters()
     
@@ -725,22 +346,17 @@ class PoseDataset(data.Dataset):
         data_dict['index'] = index
         data_dict['gt_joint_xyz'] = torch.as_tensor(joint_para_xyz, dtype=torch.float32).contiguous()
         data_dict['gt_joint_rpy'] = torch.as_tensor(joint_para_rpy, dtype=torch.float32).contiguous()
-        # print('gt_joint_xyz:', data_dict['gt_joint_xyz'])
-        # print('gt_joint_rpy:', data_dict['gt_joint_rpy'])
-        # print('gt_state:', data_dict['gt_state'])
         data_dict['offset_heatmap_gt'] = torch.as_tensor(offset_heatmap_gt, dtype=torch.float32).contiguous()
         data_dict['offset_unitvec_gt'] = torch.as_tensor(offset_unitvec_gt, dtype=torch.float32).contiguous()
         data_dict['mean_parts_gt'] = torch.as_tensor(mean_parts_gt, dtype=torch.float32).contiguous()
-
-        data_dict['parts_normals_canonical'] = torch.as_tensor(parts_normals_canonical, dtype=torch.float32).contiguous()
-        data_dict['gt_parts_normals_canonical'] = torch.as_tensor(gt_parts_normals_canonical, dtype=torch.float32).contiguous()
         # data_dict['child_transformation'] = torch.as_tensor(child_transformation, dtype=torch.float32).contiguous()
-        data_dict['path'] = json_path
+        data_dict['path'] = img_path
         data_dict['cate_id'] = torch.as_tensor(self.cate_id, dtype=torch.int8).contiguous()
 
         return data_dict
     
     
+    # Data augmentation
     def generate_aug_parameters(self, s_x=(0.8, 1.2), s_y=(0.8, 1.2), s_z=(0.8, 1.2), ax=25, ay=25, az=25, a=5):
         # for bb aug
         ex, ey, ez = np.random.rand(3)
@@ -757,7 +373,9 @@ class PoseDataset(data.Dataset):
 
     
     
+    # Calculate scale and shape information
     def get_fs_net_scale_part(self, c, urdf_id):
+        # length on xyz axes of model point cloud, in its own coordinate system
     
 
         if c == 'laptop':
@@ -872,13 +490,29 @@ class PoseDataset(data.Dataset):
 
                 return pcd  
     
+    # Heatmap
     def get_heatmap(self,joint_xyz, point, thres_r):
+        """
+        joint: [x, y, z] or [[x, y, z] + [rx, ry, rz]]
+        point: N * 3
+        """
+        # if len(joint) == 2:
+        #     P0 = np.array(joint[0])
+        #     P  = np.array(point)
+        #     l  = np.array(joint[1]).reshape(1, 3)
+        #     P0P= P - P0
+        #     # projection of P in joint minus P
+        #     PP = np.dot(P0P, l.T) * l / np.linalg.norm(l)**2  - P0P
+        # # PP的shape是[N,3]
+        # return PP
         P2P = point - joint_xyz
         distances = np.linalg.norm(P2P, axis=1)
         heatmap = 1 - distances / thres_r
         return heatmap
     
 
+
+    # Return symmetry information
     def get_sym_info_part(self, c,):
         if c == 'laptop':
             sym = np.array([0, 0, 0, 1], dtype=int)
@@ -940,6 +574,7 @@ class PoseDataset(data.Dataset):
         return norm_factors, corner_pts
 
 
+# Convert Euler angles to 3D rotation matrix
 def get_rotation(x_, y_, z_):
         # print(math.cos(math.pi/2))
         x = float(x_ / 180) * math.pi
@@ -958,11 +593,14 @@ def get_rotation(x_, y_, z_):
                         [0, 0, 1]])
         return np.dot(R_z, np.dot(R_y, R_x)).astype(np.float32)
 
+# Batch processing
 def process_batch(batch_sample,
                   device,
                   pose_mode='rot_matrix',
                   mini_batch_size=None,
                   PTS_AUG_PARAMS=None):
+    # rot_matrix
+
     assert pose_mode in ['quat_wxyz', 'quat_xyzw', 'euler_xyz', 'euler_xyz_sx_cx', 'rot_matrix'], \
         f"the rotation mode {pose_mode} is not supported!"
     if PTS_AUG_PARAMS==None:
@@ -1001,7 +639,7 @@ def process_batch(batch_sample,
     # processed_sample['id'] = batch_sample['cat_id'].to(device)      # [bs]
     # processed_sample['handle_visibility'] = batch_sample['handle_visibility'].to(device)     # [bs]
     # processed_sample['path'] = batch_sample['path']
-    if pose_mode == 'quat_xyzw':
+    if pose_mode == 'quat_xyzw':  # convert rotation matrix to quaternion
         rot = pytorch3d.transforms.matrix_to_quaternion(gt_R_da)
     elif pose_mode == 'quat_wxyz':
         rot = pytorch3d.transforms.matrix_to_quaternion(gt_R_da)[:, [3, 0, 1, 2]]
@@ -1012,34 +650,34 @@ def process_batch(batch_sample,
         rot_sin_theta = torch.sin(rot)
         rot_cos_theta = torch.cos(rot)
         rot = torch.cat((rot_sin_theta, rot_cos_theta), dim=-1)
+    # rot_matrix
     elif pose_mode == 'rot_matrix':
         rot = pytorch3d.transforms.matrix_to_rotation_6d(gt_R_da.permute(0, 2, 1)).reshape(gt_R_da.shape[0], -1)
     else:
         raise NotImplementedError
-    location = gt_t_da
-    processed_sample['gt_pose'] = torch.cat([rot.float(), location.float()], dim=-1)
+    # gt_pose = translation + rotation
+    location = gt_t_da  # [bs, 3]
+    processed_sample['gt_pose'] = torch.cat([rot.float(), location.float()], dim=-1)   # [bs, 4/6/3 + 3]
     
-    num_pts = processed_sample['pts'].shape[1]
-    zero_mean = torch.mean(processed_sample['pts'][:, :, :3], dim=1)
-    processed_sample['gt_state'] = gt_state
+    """ zero center """
+    num_pts = processed_sample['pts'].shape[1]  # train with complete point cloud, because during inference we cannot know which is base_part, here the network learns which points belong to base_part
+    zero_mean = torch.mean(processed_sample['pts'][:, :, :3], dim=1)   # center point of point cloud [bs, 1024, 3] -> [bs, 3]
+    processed_sample['gt_state'] = gt_state    # joint rotation angle
+    # processed_sample['gt_joint_para'] = gt_joint_para
 
     processed_sample['zero_mean_pts'] = copy.deepcopy(processed_sample['pts'])
     processed_sample['zero_mean_pts'][:, :, :3] -= zero_mean.unsqueeze(1).repeat(1, num_pts, 1)
     processed_sample['zero_mean_gt_pose'] = copy.deepcopy(processed_sample['gt_pose'])
-    processed_sample['zero_mean_gt_pose'][:, -3:] -= zero_mean
+    processed_sample['zero_mean_gt_pose'][:, -3:] -= zero_mean   # move translation in pose to center
 
     processed_sample['pts_center'] = zero_mean
-    processed_sample['gt_joint_xyz'] = gt_joint_xyz
-    processed_sample['gt_joint_rpy'] = gt_joint_rpy
+    processed_sample['gt_joint_xyz'] = gt_joint_xyz    # axis point
+    processed_sample['gt_joint_rpy'] = gt_joint_rpy    # axis direction
     processed_sample['gt_heatmap'] = gt_heatmap
-    processed_sample['gt_unitvec'] = gt_unitvec
-    processed_sample['gt_parts'] = gt_parts
+    processed_sample['gt_unitvec'] = gt_unitvec   # used for predicting axis point
+    processed_sample['gt_parts'] = gt_parts       # point cloud for each part
     processed_sample['cate_id'] = batch_sample['cate_id']
-    processed_sample['parts_normals_canonical'] = batch_sample['parts_normals_canonical'].to(device)
-    processed_sample['gt_parts_normals_canonical'] = batch_sample['gt_parts_normals_canonical'].to(device)
-    processed_sample['xyz_camera'] = batch_sample['xyz_camera']
-    processed_sample['cad'] = batch_sample['cad']
-    processed_sample['transformation'] = batch_sample['transformation']
+    # processed_sample['child_transformation'] = gt_child_transformation
    
 
     if 'color' in batch_sample.keys():
@@ -1052,8 +690,11 @@ def process_batch(batch_sample,
     
     if not 'color' in processed_sample.keys():
         pass
+        # processed_sample['color'] = None
+    # print(processed_sample['zero_mean_pts'].device)
     return processed_sample 
 
+# Data augmentation
 def data_augment(pts_aug_params, PC, gt_R, gt_t, gt_s, mean_shape, sym, aug_bb, aug_rt_t, aug_rt_r,
                          check_points=False):
     """
@@ -1116,6 +757,7 @@ def data_augment(pts_aug_params, PC, gt_R, gt_t, gt_s, mean_shape, sym, aug_bb, 
 
     return PC, gt_R, gt_t, gt_s
 
+# Random erosion and dilation operations on mask
 def defor_2D(roi_mask, rand_r=2, rand_pro=0.3):
     '''
 
@@ -1312,17 +954,21 @@ def get_data_loaders(
     cate_id=1,
     num_workers=0,
 ):
+
+    # Set random seed for reproducibility
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     random.seed(seed)
     np.random.seed(seed)
 
+    # Load training dataset
     dataset = PoseDataset(
         source=source,
-        mode=mode,
+        mode=mode,  # test set is sampled from training data
         data_dir=data_path,
         cate_id=cate_id
     )
+
     total_size = len(dataset)
     test_size = int((1-percentage_data) * total_size)
     indices = torch.randperm(total_size).tolist()
@@ -1330,12 +976,14 @@ def get_data_loaders(
     test_dataset = torch.utils.data.Subset(dataset, test_indices)
 
 
-    shuffle = False
+    # shuffle parameter setting for data loader
+    shuffle = False  # do not shuffle data
 
     train_size = len(dataset)
     train_indices = list(range(train_size))
     train_dataset = torch.utils.data.Subset(dataset, train_indices)
 
+    # Create data loaders
     dataloader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -1345,6 +993,7 @@ def get_data_loaders(
         drop_last=False,
         pin_memory=True,
     )
+
     val_dataloader = torch.utils.data.DataLoader(
         test_dataset,
         batch_size=batch_size,
@@ -1354,9 +1003,10 @@ def get_data_loaders(
         drop_last=False,
         pin_memory=True,
     )
+
     if mode != 'test':
         return dataloader, val_dataloader
-    
+
     return dataloader
 
 
@@ -1371,13 +1021,13 @@ def get_data_loaders(
 #     cate_id=1,
 #     num_workers=0,
 # ):
-#     # Set random seed for reproducibility
+#     # 设置随机种子以确保可重复性
 #     torch.manual_seed(seed)
 #     torch.cuda.manual_seed(seed)
 #     random.seed(seed)
 #     np.random.seed(seed)
 
-#     # Initialize dataset
+#     # 初始化数据集
 #     dataset = PoseDataset(
 #         source=source,
 #         mode=mode,
@@ -1385,23 +1035,23 @@ def get_data_loaders(
 #         cate_id=cate_id
 #     )
 
-#     # Shuffle parameter setting for data loader
-#     shuffle = False  # Do not shuffle data
+#     # 数据加载器的 shuffle 参数设置
+#     shuffle = False  # 不打乱数据
 
-#     # Calculate train and validation set sizes based on percentage
+#     # 根据百分比计算训练集和验证集的大小
 #     total_size = len(dataset)
 #     train_size = int(percentage_data * total_size)
 #     val_size = total_size - train_size
 
-#     # Split dataset in order using torch.utils.data.Subset
-#     indices = list(range(total_size))  # Generate indices in order
-#     train_indices = indices[:train_size]  # Front part as training set
-#     val_indices = indices[train_size:]   # Back part as validation set
+#     # 使用 torch.utils.data.Subset 按顺序切分数据集
+#     indices = list(range(total_size))  # 按顺序生成索引
+#     train_indices = indices[:train_size]  # 前部分作为训练集
+#     val_indices = indices[train_size:]   # 后部分作为验证集
 
 #     train_dataset = torch.utils.data.Subset(dataset, train_indices)
 #     val_dataset = torch.utils.data.Subset(dataset, val_indices)
 
-#     # Create data loaders
+#     # 创建数据加载器
 #     dataloader = torch.utils.data.DataLoader(
 #         train_dataset,
 #         batch_size=batch_size,
@@ -1421,7 +1071,7 @@ def get_data_loaders(
 #         pin_memory=True,
 #     )
 
-#     # Return data loaders
+#     # 返回数据加载器
 #     if mode != 'test':
 #         return dataloader, val_dataloader
     
@@ -1462,7 +1112,7 @@ def get_data_loaders(
 
 #     # sample
 #     size = int(percentage_data * len(dataset))
-#     dataset, val_dataset = torch.utils.data.random_split(dataset, (size, len(dataset) - size))  # Split into test and train sets, here only taking the train set
+#     dataset, val_dataset = torch.utils.data.random_split(dataset, (size, len(dataset) - size))  # split into test and train sets, here only taking the training set
 
 #     # train_dataloader = torch.utils.data.DataLoader(
 #     dataloader = torch.utils.data.DataLoader(
@@ -1503,6 +1153,7 @@ def get_data_loaders_from_cfg(cfg, data_type=['train', 'val', 'test']):
             cate_id = cfg.cate_id,
             num_workers=cfg.num_workers,
         ) 
+
         data_loaders['train_loader'] = train_loader
 
         data_loaders['val_loader'] = val_loader
@@ -1525,8 +1176,9 @@ def get_data_loaders_from_cfg(cfg, data_type=['train', 'val', 'test']):
 if __name__ == '__main__':
    
     from tqdm import tqdm
-    train_loader, val_loader = get_data_loaders(data_path='path/to/your/projectdata/ArtImage-High-level/ArtImage', cate_id=1)
-    
+    train_loader, val_loader = get_data_loaders(data_path='/home/zming/diffpose/6D/code/ArtImage-High-level/ArtImage')
+
+    # Process training set
     for batch_sample in tqdm(train_loader):
         batch_sample = process_batch(
             batch_sample=batch_sample,
@@ -1545,4 +1197,3 @@ if __name__ == '__main__':
         )
     
         
-

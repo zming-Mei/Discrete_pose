@@ -39,7 +39,12 @@ def get_config():
     parser.add_argument('--pointnet2_params', type=str, default='light')
     parser.add_argument('--pts_encoder', type=str, default='pointnet2')
     parser.add_argument('--num_bins', type=int, default=360)
-    parser.add_argument('--T', type=float, default=0.01)  # step_size for sampling 
+    parser.add_argument('--T', type=float, default=0.01)  # step_size for sampling
+    
+    """ loss weights """
+    parser.add_argument('--mse_weight', type=float, default=0.01)
+    parser.add_argument('--kl_weight', type=float, default=0.2)
+    parser.add_argument('--L1_weight', type=float, default=1.0) 
 
 
     """ training """

@@ -346,6 +346,9 @@ def main():
         "encoder": cfg.pts_encoder,
         "num_bins": cfg.num_bins,
         "T": cfg.T,
+        "mse_weight": cfg.mse_weight,
+        "kl_weight": cfg.kl_weight,
+        "L1_weight": cfg.L1_weight,
     }
     
     if cfg.total_steps is not None:

@@ -82,10 +82,10 @@ class DiscreteFlowMatching(nn.Module):
         self.device = device
         self.eps = 1e-8
         
-        # Loss weights (following discrete diffusion model configuration)
-        self.mse_weight = 0.01
-        self.kl_weight = 0.2
-        self.L1_weight = 1
+        # Loss weights (from configuration)
+        self.mse_weight = cfg.mse_weight
+        self.kl_weight = cfg.kl_weight
+        self.L1_weight = cfg.L1_weight
 
         # Initialize flow matching components
         scheduler = PolynomialConvexScheduler(n=1.5)  # Polynomial scheduler with n=1

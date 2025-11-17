@@ -1,7 +1,3 @@
-# DICArt: Advancing Category-level Articulated Object Pose Estimation in Discrete State-Spaces
-
-## Overview
-![alt text](assets/pipeline.png)
 ## Requirements
 - Ubuntu 22.04
 - Python 3.9
@@ -13,8 +9,8 @@
 - ### Install pytorch
 Create a new conda environment and activate the environment.
 ```bash
-conda create -n DICArt python=3.9
-conda activate DICArt
+conda create -n DFMArt python=3.9
+conda activate DFMArt
 ```
 
 ``` bash

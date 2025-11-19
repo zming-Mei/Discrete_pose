@@ -60,6 +60,7 @@ def get_config():
     parser.add_argument('--grad_clip', type=float, default=1.)
     parser.add_argument('--ema_rate', type=float, default=0.999)
     parser.add_argument('--lr', type=float, default=1e-3)
+    parser.add_argument('--eta_min', type=float, default=1e-5)
     parser.add_argument('--warmup', type=int, default=100)
     parser.add_argument('--lr_decay', type=float, default=0.98)
     parser.add_argument('--num_gpu', type=int, default=1)

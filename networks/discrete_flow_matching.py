@@ -3,75 +3,20 @@ import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from tqdm import tqdm
-import wandb
-import math
-import random
-import numpy as np
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from networks.pts_encoder.pointnets import PointNetfeat
 from networks.pts_encoder.pointnet2 import Pointnet2ClsMSG
-from configs.config import get_config
-from utils.metrics import rot_diff_degree
-from networks.gf_algorithms.discrete_angle import *
-from datasets.dataloader import get_data_loaders_from_cfg, process_batch
-from networks.gf_algorithms.discrete_number import *
-
-# Import flow matching components
+from networks.model_modules import *
 from flow_matching.path import MixtureDiscreteProbPath
-from flow_matching.path.scheduler import PolynomialConvexScheduler, ConvexScheduler
+from flow_matching.path.scheduler import PolynomialConvexScheduler
 from flow_matching.loss import MixturePathGeneralizedKL
 from flow_matching.solver import MixtureDiscreteEulerSolver
 from flow_matching.utils import ModelWrapper
 
 
-class TimestepEmbedder(nn.Module):
-    def __init__(self, hidden_size, frequency_embedding_size=128):
-        super().__init__()
-        self.mlp = nn.Sequential(
-            nn.Linear(frequency_embedding_size, hidden_size),
-            nn.SiLU(),
-            nn.Linear(hidden_size, hidden_size),
-        )
-        self.frequency_embedding_size = frequency_embedding_size
-
-    @staticmethod
-    def timestep_embedding(t, dim, max_period=10000):
-        half = dim // 2
-        freqs = torch.exp(-math.log(max_period) * torch.arange(start=0, end=half, device=t.device) / half)
-        args = t[:, None] * freqs[None]
-        embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
-        if dim % 2:
-            embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
-        return embedding
-
-    def forward(self, t):
-        t_freq = self.timestep_embedding(t, self.frequency_embedding_size)
-        t_emb = self.mlp(t_freq)
-        return t_emb
-
-class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-        self.same_channels = in_channels == out_channels
-        self.net = nn.Sequential(
-            nn.Linear(in_channels, out_channels),
-            nn.BatchNorm1d(out_channels),
-            nn.SiLU(),
-            nn.Dropout(p=0.1),
-            nn.Linear(out_channels, out_channels),
-            nn.BatchNorm1d(out_channels)
-        )
-        if not self.same_channels:
-            self.proj = nn.Linear(in_channels, out_channels)
-        
-    def forward(self, x):
-        if self.same_channels:
-            return x + self.net(x)
-        else:
-            return self.proj(x) + self.net(x)
-        
 class DiscreteFlowMatching(nn.Module):
+    """Discrete Flow Matching network for 6D pose estimation"""
+    
     def __init__(self, cfg, device='cuda'):
         super().__init__()
         self.cfg = cfg
@@ -88,15 +33,17 @@ class DiscreteFlowMatching(nn.Module):
         self.L1_weight = cfg.L1_weight
 
         # Initialize flow matching components
-        scheduler = PolynomialConvexScheduler(n=1.5)  # Polynomial scheduler with n=1
+        scheduler = PolynomialConvexScheduler(n=1.5)  # Polynomial scheduler with n=1.5
         self.path = MixtureDiscreteProbPath(scheduler=scheduler)
         self.criterion = MixturePathGeneralizedKL(path=self.path)
 
-        # Point Cloud Feature Extractors
+        # Point cloud feature extractors
         if self.cfg.pts_encoder == 'pointnet':
             self.pts_encoder = PointNetfeat(num_points=self.cfg.num_points, out_dim=1024)
+            self.pts_feat_dim = 1024
         elif self.cfg.pts_encoder == 'pointnet2':
             self.pts_encoder = Pointnet2ClsMSG(0)
+            self.pts_feat_dim = 1024
         elif self.cfg.pts_encoder == 'pointnet_and_pointnet2':
             self.pts_pointnet = PointNetfeat(num_points=self.cfg.num_points, out_dim=1024)
             self.pts_pointnet2 = Pointnet2ClsMSG(0)
@@ -105,73 +52,48 @@ class DiscreteFlowMatching(nn.Module):
                 nn.BatchNorm1d(1024),
                 nn.ReLU()
             )
+            self.pts_feat_dim = 1024
         else:
             raise NotImplementedError
 
+        # Timestep embedder
         self.time_embedder = TimestepEmbedder(hidden_size=256, frequency_embedding_size=128).to(device)
 
-        # Flow matching predicts posterior p(x_1|x_t) which will be converted to velocity
-        self.mlp_shared = nn.Sequential(
-            nn.Linear(self.num_dimensions*self.num_bins + 256 + 1024, 1024),
-            nn.LayerNorm(1024),
-            nn.SiLU(),
-            nn.Dropout(p=0.1),
-            ResidualBlock(1024, 1024),
-            nn.Linear(1024, 512),
-            nn.LayerNorm(512),
-            nn.SiLU(),
-            nn.Dropout(p=0.2)
-        ).to(device)
+        # Attention modules for enhanced feature interaction
+        self.cond_time_proj = nn.Linear(self.pts_feat_dim, 256).to(device)
+        self.cross_attention_fusion = CrossAttentionFusion(embed_dim=256, num_heads=8, dropout=0.1).to(device)
+        self.self_attention_angles = SelfAttentionBlock(embed_dim=256, num_heads=8, dropout=0.1).to(device)
+        self.self_attention_trans = SelfAttentionBlock(embed_dim=256, num_heads=8, dropout=0.1).to(device)
+        self.conditional_attention_angles = ConditionalAttention(embed_dim=256, condition_dim=256, num_heads=4, dropout=0.1).to(device)
+        self.conditional_attention_trans = ConditionalAttention(embed_dim=256, condition_dim=256, num_heads=4, dropout=0.1).to(device)
 
-        self.angles_branch = nn.Sequential(
-            nn.Linear(512, 384),
-            nn.LayerNorm(384),
-            nn.SiLU(),
-            nn.Dropout(p=0.1),
-            nn.Linear(384, 256),
-            nn.LayerNorm(256),
-            nn.SiLU(),
-            nn.Dropout(p=0.1)
-        ).to(device)
+        # Shared MLP to predict posterior probability p(x_1|x_t)
+        input_dim = self.num_dimensions * self.num_bins + 256 + self.pts_feat_dim
+        self.mlp_shared = SharedMLP(input_dim=input_dim, hidden_dim=1024, output_dim=512, dropout=0.1).to(device)
 
-        self.translation_branch = nn.Sequential(
-            nn.Linear(512, 384),
-            nn.LayerNorm(384),
-            nn.SiLU(),
-            nn.Dropout(p=0.1),
-            nn.Linear(384, 256),
-            nn.LayerNorm(256),
-            nn.SiLU(),
-            nn.Dropout(p=0.1)
-        ).to(device)
+        # Angle and translation branches
+        self.angles_branch = PoseBranch(input_dim=512, hidden_dim=384, output_dim=256, dropout=0.1).to(device)
+        self.translation_branch = PoseBranch(input_dim=512, hidden_dim=384, output_dim=256, dropout=0.1).to(device)
 
-        # Output heads predict posterior logits p(x_1^i | x_t)
+        # Output heads to predict posterior logits p(x_1^i | x_t)
         self.angle_heads = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(256, 256),
-                nn.BatchNorm1d(256),
-                nn.SiLU(),
-                nn.Linear(256, self.num_bins)
-            ) for _ in range(self.angle_dimensions)
+            PredictionHead(input_dim=256, hidden_dim=256, num_bins=self.num_bins)
+            for _ in range(self.angle_dimensions)
         ]).to(device)
 
         self.translation_heads = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(256, 256),
-                nn.BatchNorm1d(256),
-                nn.SiLU(),
-                nn.Linear(256, self.num_bins)
-            ) for _ in range(self.translation_dimensions)
+            PredictionHead(input_dim=256, hidden_dim=256, num_bins=self.num_bins)
+            for _ in range(self.translation_dimensions)
         ]).to(device)
 
 
     def extract_pts_feature(self, data):
+
         pts = data['pts']
         if self.cfg.pts_encoder == 'pointnet':
             return self.pts_encoder(pts.permute(0,2,1))
         elif self.cfg.pts_encoder == 'pointnet2':
             return self.pts_encoder(pts)
-        
         elif self.cfg.pts_encoder == 'pointnet_and_pointnet2':
             feat1 = self.pts_pointnet(pts.permute(0,2,1))
             feat2 = self.pts_pointnet2(pts)
@@ -179,38 +101,56 @@ class DiscreteFlowMatching(nn.Module):
         else:
             raise NotImplementedError
 
-
     def sample_noise(self, batch_size):
-        """Sample noise x1 from uniform distribution"""
         return torch.randint(0, self.num_bins, (batch_size, self.num_dimensions), device=self.device)
 
-
-
     def model_predict(self, x_t, t, cond):
-        """Predict posterior logits p(x_1 | x_t)"""
         bs = x_t.shape[0]
         x_t_onehot = F.one_hot(x_t, num_classes=self.num_bins).float()
         x_t_flat = x_t_onehot.view(bs, -1)
-        t_emb = self.time_embedder(t)       # [bs, 256]
-        input_feat = torch.cat([x_t_flat, t_emb, cond], dim=1)
+        t_emb = self.time_embedder(t)  # [bs, 256]
+
+        # Enhanced feature fusion with attention
+        cond_proj = self.cond_time_proj(cond)
+        t_emb_expanded = t_emb.unsqueeze(1)  # [bs, 1, 256]
+        cond_proj_expanded = cond_proj.unsqueeze(1)  # [bs, 1, 256]
+        t_emb_enhanced = self.cross_attention_fusion(t_emb_expanded, cond_proj_expanded).squeeze(1)
+
+        input_feat = torch.cat([x_t_flat, t_emb_enhanced, cond], dim=1)
 
         shared_feat = self.mlp_shared(input_feat)  # [bs, 512]
 
+        # Angle and translation branches
         angles_feat = self.angles_branch(shared_feat)  # [bs, 256]
         trans_feat = self.translation_branch(shared_feat)  # [bs, 256]
 
+        # Self attention for each branch
+        angles_feat = self.self_attention_angles(angles_feat)
+        trans_feat = self.self_attention_trans(trans_feat)
+
+        # Conditional attention between branches (cross-branch interaction)
+        angles_feat_enhanced = self.conditional_attention_angles(angles_feat, trans_feat)
+        trans_feat_enhanced = self.conditional_attention_trans(trans_feat, angles_feat)
+
         # Predict posterior logits for each dimension
-        angle_logits = [head(angles_feat) for head in self.angle_heads]
-        trans_logits = [head(trans_feat) for head in self.translation_heads]
+        angle_logits = [head(angles_feat_enhanced) for head in self.angle_heads]
+        trans_logits = [head(trans_feat_enhanced) for head in self.translation_heads]
 
         # Stack logits: [bs, num_dimensions, num_bins]
         posterior_logits = torch.stack(angle_logits + trans_logits, dim=1)
         return posterior_logits
 
-
     def sample(self, pts_feat, step_size=0.01):
-        """Sample using discrete flow matching solver"""
-        # Create a wrapper for the model that matches the flow_matching interface
+        """Sample using discrete flow matching solver
+        
+        Args:
+            pts_feat: Point cloud features [bs, pts_feat_dim]
+            step_size: Sampling step size
+            
+        Returns:
+            Sampling results [bs, num_dimensions]
+        """
+        # Create model wrapper to match flow_matching interface
         class FlowMatchingWrapper(ModelWrapper):
             def __init__(self, model, cond):
                 super().__init__(model)
@@ -219,7 +159,7 @@ class DiscreteFlowMatching(nn.Module):
             def forward(self, x, t, **extras):
                 # x: [batch_size, num_dimensions]
                 # t: [batch_size] or scalar
-                # cond: [batch_size, 1024]
+                # cond: [batch_size, pts_feat_dim]
                 logits = self.model.model_predict(x, t, self.cond)
                 return torch.softmax(logits, dim=-1)
 
@@ -242,11 +182,9 @@ class DiscreteFlowMatching(nn.Module):
             time_grid=torch.tensor([0.0, 1.0], device=self.device)
         )
 
-        return result 
-    
+        return result
 
     def loss(self, x_1, pts_feat):
-        """Flow matching loss using mixed MSE + GeneralizedKL divergence"""
         cond = pts_feat
         bs = x_1.shape[0]
 

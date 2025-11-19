@@ -50,14 +50,14 @@ class DiscreteFlowTrainer:
             self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                 self.optimizer,
                 T_max=total_steps,
-                eta_min=3e-6
+                eta_min=cfg.eta_min
             )
         else:
             # Keep the original epochs-based scheduler
             self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                 self.optimizer,
                 T_max=cfg.n_epochs,
-                eta_min=3e-6
+                eta_min=cfg.eta_min
             )
 
     def train_step(self, batch_sample):
@@ -333,16 +333,17 @@ def train_data(cfg, train_loader, val_loader, test_loader,trans_stats):
 
 def main():
 
-    torch.manual_seed(42)
-    np.random.seed(42)
-    random.seed(42)
-
     cfg = get_config()
+    
+    torch.manual_seed(cfg.seed)
+    np.random.seed(cfg.seed)
+    random.seed(cfg.seed)
     
     # Determine whether to use steps or epochs based on configuration
     wandb_config = {
         "batch_size": cfg.batch_size,
         "learning_rate": cfg.lr,
+        "eta_min": cfg.eta_min,
         "encoder": cfg.pts_encoder,
         "num_bins": cfg.num_bins,
         "T": cfg.T,

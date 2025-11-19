@@ -204,15 +204,15 @@ def evaluate_model(cfg, test_loader, trans_stats):
 
 def main():
     """Main evaluation function"""
-    # Set random seeds for reproducibility
-    torch.manual_seed(42)
-    np.random.seed(42)
-    random.seed(42)
-
     # Load configuration and data
     cfg = get_config()
-    data_loaders = get_data_loaders_from_cfg(cfg, ['test'])
-    test_loader = data_loaders['test_loader'] 
+    
+    # Set random seeds for reproducibility
+    torch.manual_seed(cfg.seed)
+    np.random.seed(cfg.seed)
+    random.seed(cfg.seed)
+    data_loaders = get_data_loaders_from_cfg(cfg, ['val'])
+    test_loader = data_loaders['val_loader'] 
     print(f'Test set size: {len(test_loader)} batches')
     
     # Translation statistics [min_x, max_x, min_y, max_y, min_z, max_z]
@@ -228,4 +228,3 @@ def main():
             
 if __name__ == "__main__":
     main()
-

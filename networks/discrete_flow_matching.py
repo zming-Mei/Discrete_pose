@@ -33,7 +33,7 @@ class DiscreteFlowMatching(nn.Module):
         self.L1_weight = cfg.L1_weight
 
         # Initialize flow matching components
-        scheduler = PolynomialConvexScheduler(n=1.5)  # Polynomial scheduler with n=1.5
+        scheduler = PolynomialConvexScheduler(n=2)  # Polynomial scheduler with n=2
         self.path = MixtureDiscreteProbPath(scheduler=scheduler)
         self.criterion = MixturePathGeneralizedKL(path=self.path)
 

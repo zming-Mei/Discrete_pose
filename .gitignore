@@ -1,9 +1,7 @@
 pytorch3d/
 
-
 __pycache__/
 *.py[cod]
-
 venv/
 ENV/
 env/
@@ -11,6 +9,7 @@ env/
 /D3PM_6D
 /wandb
 /tools
+/discrete_diffusion
 .venv/
 .vscode/
 .idea/

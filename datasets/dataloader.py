@@ -34,7 +34,6 @@ class PoseDataset(data.Dataset):
 
     def __init__(self, source=None, mode='train', data_dir=None, cate_id=None):
         '''
-
         :param source: 'CAMERA' or 'Real' or 'CAMERA+Real'
         :param mode: 'train' or 'test'
         :param data_dir: 'path to dataset'
@@ -133,15 +132,15 @@ class PoseDataset(data.Dataset):
         joint_state = [0. for _ in range(self.num_parts-1)]  # axis angle
         joint_para = [[[0 for _ in range(3)] for _ in range(2)] for _ in range(self.joint_num)]  
 
-        """
-        if self.cate_id == 2:
-            for idx in range(self.num_parts-1):
-                link_category_id = annotation['instances'][0]['links'][idx+1]['link_category_id']-1
-                joint_state[link_category_id] = annotation['instances'][0]['links'][idx+1]['state']
-        else:
-            for part_id in range(self.num_parts-1):
-                joint_state[part_id] = annotation['instances'][0]['links'][part_id+1]['state']
-        """
+      
+        # if self.cate_id == 2:
+        #     for idx in range(self.num_parts-1):
+        #         link_category_id = annotation['instances'][0]['links'][idx+1]['link_category_id']-1
+        #         joint_state[link_category_id] = annotation['instances'][0]['links'][idx+1]['state']
+        # else:
+        #     for part_id in range(self.num_parts-1):
+        #         joint_state[part_id] = annotation['instances'][0]['links'][part_id+1]['state']
+      
         for idx in range(self.num_parts-1):
             link_category_id = annotation['instances'][0]['links'][idx+1]['link_category_id']-1
             joint_state[link_category_id] = annotation['instances'][0]['links'][idx+1]['state']  # take idx+1 because basepart has no state (angle)
@@ -195,11 +194,6 @@ class PoseDataset(data.Dataset):
             rle = None
 
             try:
-                """
-                    maskUtils.frPyObjects 这个函数将其中的多边形（polygon）
-                    或未压缩的RLE（uncompressed RLE）转换为压缩的RLE格式，以便于后续的处理和分析。
-                """
-
                 rle = maskUtils.frPyObjects(part_seg, 640,640)
 
             except:
@@ -1021,13 +1015,11 @@ def get_data_loaders(
 #     cate_id=1,
 #     num_workers=0,
 # ):
-#     # 设置随机种子以确保可重复性
 #     torch.manual_seed(seed)
 #     torch.cuda.manual_seed(seed)
 #     random.seed(seed)
 #     np.random.seed(seed)
 
-#     # 初始化数据集
 #     dataset = PoseDataset(
 #         source=source,
 #         mode=mode,
@@ -1035,23 +1027,20 @@ def get_data_loaders(
 #         cate_id=cate_id
 #     )
 
-#     # 数据加载器的 shuffle 参数设置
-#     shuffle = False  # 不打乱数据
+#     shuffle = False
 
-#     # 根据百分比计算训练集和验证集的大小
+
 #     total_size = len(dataset)
 #     train_size = int(percentage_data * total_size)
 #     val_size = total_size - train_size
 
-#     # 使用 torch.utils.data.Subset 按顺序切分数据集
-#     indices = list(range(total_size))  # 按顺序生成索引
-#     train_indices = indices[:train_size]  # 前部分作为训练集
-#     val_indices = indices[train_size:]   # 后部分作为验证集
+#     indices = list(range(total_size)) 
+#     train_indices = indices[:train_size] 
+#     val_indices = indices[train_size:]   
 
 #     train_dataset = torch.utils.data.Subset(dataset, train_indices)
 #     val_dataset = torch.utils.data.Subset(dataset, val_indices)
 
-#     # 创建数据加载器
 #     dataloader = torch.utils.data.DataLoader(
 #         train_dataset,
 #         batch_size=batch_size,
@@ -1071,7 +1060,6 @@ def get_data_loaders(
 #         pin_memory=True,
 #     )
 
-#     # 返回数据加载器
 #     if mode != 'test':
 #         return dataloader, val_dataloader
     

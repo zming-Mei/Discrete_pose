@@ -188,10 +188,10 @@ def bins_to_angles(indices, bins_theta, bins_phi, bins_alpha):
         phi_idx = indices_np[i, 1]
         alpha_idx = indices_np[i, 2]
 
-
-        theta_continuous = theta_idx * bin_width_theta  + theta_min
-        phi_continuous = phi_idx * bin_width_phi  + phi_min
-        alpha_continuous = alpha_idx * bin_width_alpha  + alpha_min
+        theta_continuous = (theta_idx + 0.5) * bin_width_theta + theta_min
+        phi_continuous = (phi_idx + 0.5) * bin_width_phi + phi_min
+        alpha_continuous = (alpha_idx + 0.5) * bin_width_alpha + alpha_min
+        
         theta_continuous = np.where(
             np.isclose(theta_continuous, 0, atol=1e-4),  
             0.5,  

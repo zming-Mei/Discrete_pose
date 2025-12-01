@@ -54,9 +54,9 @@ def bins_to_numbers(bins, translation_status, bins_num):
     y_min, y_max = translation_status[2], translation_status[3]
     z_min, z_max = translation_status[4], translation_status[5]
 
-    normalized_x = bins[:, 0].float() / (bins_num - 1)
-    normalized_y = bins[:, 1].float() / (bins_num - 1)
-    normalized_z = bins[:, 2].float() / (bins_num - 1)
+    normalized_x = (bins[:, 0].float() + 0.5) / bins_num
+    normalized_y = (bins[:, 1].float() + 0.5) / bins_num
+    normalized_z = (bins[:, 2].float() + 0.5) / bins_num
 
     numbers_x = normalized_x * (x_max - x_min) + x_min
     numbers_y = normalized_y * (y_max - y_min) + y_min

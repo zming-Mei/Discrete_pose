@@ -4,6 +4,7 @@
 # This source code is licensed under the CC-by-NC license found in the
 # LICENSE file in the root directory of this source tree.
 
+import torch
 from torch import Tensor
 
 from flow_matching.path.path import ProbPath
@@ -167,6 +168,43 @@ class AffineProbPath(ProbPath):
         a_t = -d_sigma_t / (d_alpha_t * sigma_t - d_sigma_t * alpha_t)
         b_t = sigma_t / (d_alpha_t * sigma_t - d_sigma_t * alpha_t)
 
+        return a_t * x_t + b_t * velocity
+    
+    def velocity_to_target_broadcast(self, velocity: Tensor, x_t: Tensor, t: Tensor) -> Tensor:
+        r"""Convert from velocity to x_1 representation.
+
+        | given :math:`\dot{X}_t`.
+        | return :math:`X_1`.
+
+        Args:
+            velocity (Tensor): velocity at the path sample.
+            x_t (Tensor): path sample at time t.
+            t (Tensor): time in [0,1].
+
+        Returns:
+            Tensor: target data point.
+        """
+        scheduler_output = self.scheduler(t)
+
+        alpha_t = scheduler_output.alpha_t
+        d_alpha_t = scheduler_output.d_alpha_t
+        sigma_t = scheduler_output.sigma_t
+        d_sigma_t = scheduler_output.d_sigma_t
+
+        # Add epsilon to prevent division by zero
+        denominator = d_alpha_t * sigma_t - d_sigma_t * alpha_t
+        eps = 1e-8
+        denominator = denominator + eps * (denominator.abs() < eps).float()
+        
+        a_t = -d_sigma_t / denominator
+        b_t = sigma_t / denominator
+        
+        # Clamp to prevent extreme values
+        a_t = torch.clamp(a_t, min=-1e6, max=1e6)
+        b_t = torch.clamp(b_t, min=-1e6, max=1e6)
+        
+        a_t = a_t.unsqueeze(1)  # [bs, 1]
+        b_t = b_t.unsqueeze(1)  # [bs, 1]
         return a_t * x_t + b_t * velocity
 
     def epsilon_to_target(self, epsilon: Tensor, x_t: Tensor, t: Tensor) -> Tensor:

@@ -26,6 +26,7 @@ class DiscreteFlowMatching(nn.Module):
         self.num_dimensions = self.angle_dimensions + self.translation_dimensions
         self.device = device
         self.eps = 1e-8
+        self.time_epsilon =  1e-3
         
         # Loss weights (from configuration)
         self.mse_weight = cfg.mse_weight
@@ -188,9 +189,8 @@ class DiscreteFlowMatching(nn.Module):
         cond = pts_feat
         bs = x_1.shape[0]
 
-        time_epsilon = 1e-3 
         # Sample time t uniformly from [0,1]
-        t = torch.rand(bs, device=self.device) * (1.0 - time_epsilon)
+        t = torch.rand(bs, device=self.device) * (1.0 - self.time_epsilon)
         # Sample x_0 from uniform distribution (source distribution)
         x_0 = self.sample_noise(bs)
 

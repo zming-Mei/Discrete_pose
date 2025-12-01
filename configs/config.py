@@ -1,5 +1,4 @@
 import argparse
-from ipdb import set_trace
 
 def get_config():
     parser = argparse.ArgumentParser()
@@ -16,9 +15,7 @@ def get_config():
     parser.add_argument('--cate_id', type=int, default=1)
     
     """ dataset """
-
     parser.add_argument('--data_path', type=str)
-    parser.add_argument('--o2c_pose', default=True, action='store_true')
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--max_batch_size', type=int, default=192)  # 192
     parser.add_argument('--mini_bs', type=int, default=1)
@@ -33,30 +30,30 @@ def get_config():
     
     """ model """
     parser.add_argument('--hidden_dim', type=int, default=128)
-    parser.add_argument('--sampler_mode', nargs='+')
     parser.add_argument('--sampling_steps', type=int)
-    parser.add_argument('--regression_head', type=str, default='Rx_Ry_and_T')
     parser.add_argument('--pointnet2_params', type=str, default='light')
     parser.add_argument('--pts_encoder', type=str, default='pointnet2')
     parser.add_argument('--num_bins', type=int, default=360)
     parser.add_argument('--T', type=float, default=0.01)  # step_size for sampling
     
     """ loss weights """
-    parser.add_argument('--mse_weight', type=float, default=0.01)
-    parser.add_argument('--kl_weight', type=float, default=0.2)
-    parser.add_argument('--L1_weight', type=float, default=1.0) 
-
+    parser.add_argument('--mse_weight', type=float, default=0)
+    parser.add_argument('--kl_weight', type=float, default=1)
+    parser.add_argument('--L1_weight', type=float, default=0.1) 
+    parser.add_argument('--velocity_weight', type=float, default=1.0)
+    parser.add_argument('--rotation_weight', type=float, default=1.0)
+    parser.add_argument('--translation_weight', type=float, default=1.0)
+    parser.add_argument('--pose_prediction_weight', type=float, default=0.1)  # Weight for pose prediction loss (angle + translation)
 
     """ training """
     parser.add_argument('--pretrained_model_path', type=str)
     parser.add_argument('--n_epochs', type=int, default=1000)  
     parser.add_argument('--total_steps', type=int, default=None)  
     parser.add_argument('--log_dir', type=str, default='debug')
-    parser.add_argument('--output_dir', type=str, default='DiscreteFlow_6D_KL')  
+    parser.add_argument('--output_dir', type=str, default='DFM')  
     parser.add_argument('--optimizer',  type=str, default='Adam')
     parser.add_argument('--eval_freq', type=int, default=100) 
     parser.add_argument('--eval_freq_steps', type=int, default=1000) 
-    parser.add_argument('--repeat_num', type=int, default=20)
     parser.add_argument('--grad_clip', type=float, default=1.)
     parser.add_argument('--ema_rate', type=float, default=0.999)
     parser.add_argument('--lr', type=float, default=1e-3)
@@ -71,7 +68,6 @@ def get_config():
     parser.add_argument('--eval', default=False, action='store_true')
     parser.add_argument('--pred', default=False, action='store_true')
     parser.add_argument('--results_path', type=str, default='')
-    parser.add_argument('--T0', type=float, default=1.0)
     parser.add_argument('--pretrained_model_path_test', type=str, default='')
    
     cfg = parser.parse_args()

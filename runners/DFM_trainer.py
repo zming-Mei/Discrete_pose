@@ -346,7 +346,7 @@ def main():
         "eta_min": cfg.eta_min,
         "encoder": cfg.pts_encoder,
         "num_bins": cfg.num_bins,
-        "T": cfg.T,
+        "T_dfm": cfg.T_dfm if hasattr(cfg, 'T_dfm') else 0.01,
         "mse_weight": cfg.mse_weight,
         "kl_weight": cfg.kl_weight,
         "L1_weight": cfg.L1_weight,

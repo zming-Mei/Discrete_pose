@@ -165,9 +165,10 @@ class ContinuousFlowEvaluator:
         with torch.no_grad():
             # Sample from the continuous flow model
             # pred: [bs, 9] first 6 dims are 6D rotation, last 3 dims are translation (no normalization)
+            step_size = self.cfg.T_acfm if hasattr(self.cfg, 'T_acfm') else (self.cfg.T if hasattr(self.cfg, 'T') else 0.01)
             pred = self.model.sample(
                 pts_feat, 
-                step_size=self.cfg.T if hasattr(self.cfg, 'T') else 0.01,
+                step_size=step_size,
                 method='euler'
             )
             

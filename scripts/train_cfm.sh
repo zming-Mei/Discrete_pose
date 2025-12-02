@@ -9,7 +9,7 @@ CUDA_VISIBLE_DEVICES="0" python runners/CFM_trainer.py \
 --rotation_weight 1.0 \
 --translation_weight 1.0 \
 --pose_prediction_weight 5.0 \
---T 0.01 \
+--T_acfm 0.01 \
 --output_dir ckpts/CFM_lr5e-4_8w_attention_new_loss \
 --seed 42 \
 --num_bins 360 \
@@ -17,7 +17,6 @@ CUDA_VISIBLE_DEVICES="0" python runners/CFM_trainer.py \
 --joint_num 1 \
 --num_parts 2 \
 --num_workers 16 \
---saved_model_name CFM_Train \
 --pts_encoder pointnet2 \
 --is_train
 

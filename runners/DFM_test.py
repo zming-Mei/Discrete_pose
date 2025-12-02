@@ -198,7 +198,8 @@ class DiscreteFlowEvaluator:
         pts_feat = self.model.extract_pts_feature(batch_sample).to(self.device)
 
         with torch.no_grad():
-            pred = self.model.sample(pts_feat, step_size=self.cfg.T)
+            step_size = self.cfg.T_dfm if hasattr(self.cfg, 'T_dfm') else 0.01
+            pred = self.model.sample(pts_feat, step_size=step_size)
             pred_rot_bins, pred_trans_bins = pred[:, :3], pred[:, 3:6]
 
             # Get final probabilities from model prediction at t=1 (final time step)

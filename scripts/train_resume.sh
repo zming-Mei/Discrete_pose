@@ -5,7 +5,7 @@ CUDA_VISIBLE_DEVICES="0" python runners/DFM_trainer.py \
 --total_steps 30000 \
 --lr 1e-4 \
 --num_bins 360 \
---T 0.01 \
+--T_dfm 0.01 \
 --mse_weight 0 \
 --kl_weight 1 \
 --L1_weight 0.1 \

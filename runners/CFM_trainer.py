@@ -366,7 +366,7 @@ def main():
         "learning_rate": cfg.lr,
         "eta_min": cfg.eta_min,
         "encoder": cfg.pts_encoder,
-        "T": cfg.T if hasattr(cfg, 'T') else 0.01,
+        "T_acfm": cfg.T_acfm if hasattr(cfg, 'T_acfm') else 0.01,
         "velocity_weight": cfg.velocity_weight if hasattr(cfg, 'velocity_weight') else 1.0,
         "rotation_weight": cfg.rotation_weight if hasattr(cfg, 'rotation_weight') else 1.0,
         "translation_weight": cfg.translation_weight if hasattr(cfg, 'translation_weight') else 1.0,

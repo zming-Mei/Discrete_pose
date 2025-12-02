@@ -7,7 +7,7 @@ import pytorch3d.transforms as pytorch3d_transforms
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from networks.pts_encoder.pointnets import PointNetfeat
 from networks.pts_encoder.pointnet2 import Pointnet2ClsMSG
-from networks.model_modules import *
+from networks.gf_algorithms.model_modules import *
 from flow_matching.path import CondOTProbPath,AffineProbPath
 from flow_matching.path.scheduler import PolynomialConvexScheduler
 from flow_matching.solver import ODESolver

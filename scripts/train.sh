@@ -9,7 +9,7 @@ CUDA_VISIBLE_DEVICES="0" python runners/DFM_trainer.py \
 --kl_weight 1 \
 --L1_weight 0.1 \
 --num_bins 360 \
---T 0.01 \
+--T_dfm 0.01 \
 --output_dir ckpts/DFM_lr5e-4_8w_360bins_0_1_0.1_attention_n2 \
 --eval_freq_steps 5000 \
 --seed 42 \
@@ -17,7 +17,6 @@ CUDA_VISIBLE_DEVICES="0" python runners/DFM_trainer.py \
 --joint_num 1 \
 --num_parts 2 \
 --num_workers 16 \
---saved_model_name DFM_Train11.09 \
 --pts_encoder pointnet2 \
 --is_train  
 

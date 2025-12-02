@@ -6,7 +6,7 @@ import torch.nn.functional as F
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from networks.pts_encoder.pointnets import PointNetfeat
 from networks.pts_encoder.pointnet2 import Pointnet2ClsMSG
-from networks.model_modules import *
+from networks.gf_algorithms.model_modules import *
 from flow_matching.path import MixtureDiscreteProbPath
 from flow_matching.path.scheduler import PolynomialConvexScheduler
 from flow_matching.loss import MixturePathGeneralizedKL
@@ -184,6 +184,86 @@ class DiscreteFlowMatching(nn.Module):
         )
 
         return result
+
+    def extract_topk_info(self, posterior_logits, k=10):
+        """
+        Extract top-K information from DFM's softmax distribution
+        
+        Args:
+            posterior_logits: [bs, num_dimensions, num_bins] Model output logits
+            k: Number of top bins to extract
+            
+        Returns:
+            dict containing:
+                - coarse_pose: [bs, num_dimensions] Argmax predicted coarse pose (bin indices)
+                - topk_bins: [bs, num_dimensions, k] Top-K bin indices per dimension
+                - topk_probs: [bs, num_dimensions, k] Top-K probabilities per dimension
+                - topk_offsets: [bs, num_dimensions, k] Offsets relative to argmax bin
+                - entropy: [bs, num_dimensions] Entropy per dimension (uncertainty measure)
+        """
+        bs = posterior_logits.shape[0]
+        
+        # Compute softmax probabilities
+        probs = F.softmax(posterior_logits, dim=-1)  # [bs, num_dimensions, num_bins]
+        
+        # 1. Extract argmax as coarse pose
+        coarse_pose = torch.argmax(probs, dim=-1)  # [bs, num_dimensions]
+        
+        # 2. Extract top-K bins and probabilities
+        topk_probs, topk_bins = torch.topk(probs, k=k, dim=-1)  # [bs, num_dimensions, k]
+        
+        # 3. Compute relative offsets (relative to argmax bin)
+        coarse_pose_expanded = coarse_pose.unsqueeze(-1)  # [bs, num_dimensions, 1]
+        topk_offsets = topk_bins - coarse_pose_expanded  # [bs, num_dimensions, k]
+        
+        # 4. Compute entropy per dimension (measure of uncertainty)
+        # H = -sum(p * log(p))
+        entropy = -torch.sum(probs * torch.log(probs + 1e-10), dim=-1)  # [bs, num_dimensions]
+        
+        return {
+            'coarse_pose': coarse_pose,
+            'topk_bins': topk_bins,
+            'topk_probs': topk_probs,
+            'topk_offsets': topk_offsets,
+            'entropy': entropy
+        }
+
+
+    def predict_coarse_pose(self, pts_feat, step_size=0.01, k=10, use_sampling=True):
+        """
+        Predict coarse pose and extract top-K information (for second stage)
+        
+        Args:
+            pts_feat: [bs, pts_feat_dim] Point cloud features
+            step_size: Sampling step size for ODE solver
+            k: Number of top bins to extract
+            use_sampling: If True, use full ODE sampling; if False, direct prediction
+            
+        Returns:
+            dict containing coarse pose and top-K information
+        """
+        bs = pts_feat.shape[0]
+        
+        if use_sampling:
+            # Method A: Full ODE sampling (more accurate, slower)
+            # Use the complete flow matching sampling process
+            x_final = self.sample(pts_feat, step_size=step_size)  # [bs, num_dimensions]
+            
+            # Get posterior distribution at final time
+            t_final = torch.ones(bs, device=self.device) * (1.0 - self.time_epsilon)
+            posterior_logits = self.model_predict(x_final, t_final, pts_feat)
+        else:
+            # Method B: Direct prediction (faster, less accurate)
+            # Skip ODE integration, directly predict at t≈1
+            x_init = self.sample_noise(bs)
+            t = torch.ones(bs, device=self.device) * (1.0 - self.time_epsilon)
+            posterior_logits = self.model_predict(x_init, t, pts_feat)
+        
+        # Extract top-K information
+        topk_info = self.extract_topk_info(posterior_logits, k=k)
+        
+        return topk_info
+
 
     def loss(self, x_1, pts_feat):
         cond = pts_feat

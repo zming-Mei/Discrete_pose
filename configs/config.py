@@ -34,7 +34,8 @@ def get_config():
     parser.add_argument('--pointnet2_params', type=str, default='light')
     parser.add_argument('--pts_encoder', type=str, default='pointnet2')
     parser.add_argument('--num_bins', type=int, default=360)
-    parser.add_argument('--T', type=float, default=0.01)  # step_size for sampling
+    parser.add_argument('--T_dfm', type=float, default=0.01)  # step_size for DFM sampling
+    parser.add_argument('--T_acfm', type=float, default=0.01)  # step_size for ACFM sampling
     
     """ loss weights """
     parser.add_argument('--mse_weight', type=float, default=0)
@@ -63,7 +64,13 @@ def get_config():
     parser.add_argument('--num_gpu', type=int, default=1)
     parser.add_argument('--is_train', default=False, action='store_true')
     parser.add_argument('--saved_model_name', type=str, default=None)
-    
+    """ co-training """
+    parser.add_argument('--use_coarse_as_x0', default=False)
+    parser.add_argument('--freeze_dfm', default=True)
+    parser.add_argument('--topk_k', type=int, default=10)
+    parser.add_argument('--dfm_pretrained_path', type=str, default=None)
+    parser.add_argument('--acfm_pretrained_path', type=str, default=None)
+    parser.add_argument('--dfm_cache_path', type=str, default=None, help='Path to precomputed DFM cache for faster training')
     """ testing """
     parser.add_argument('--eval', default=False, action='store_true')
     parser.add_argument('--pred', default=False, action='store_true')

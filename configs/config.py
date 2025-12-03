@@ -71,6 +71,8 @@ def get_config():
     parser.add_argument('--dfm_pretrained_path', type=str, default=None)
     parser.add_argument('--acfm_pretrained_path', type=str, default=None)
     parser.add_argument('--dfm_cache_path', type=str, default=None, help='Path to precomputed DFM cache for faster training')
+    parser.add_argument('--acfm_rotation_type', type=str, default='euler', choices=['euler', '6d'], 
+                        help='Rotation representation for ACFM output: euler (3D) or 6d (6D rotation)')
     """ testing """
     parser.add_argument('--eval', default=False, action='store_true')
     parser.add_argument('--pred', default=False, action='store_true')

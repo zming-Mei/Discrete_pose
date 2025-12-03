@@ -9,6 +9,7 @@ from networks.pts_encoder.pointnets import PointNetfeat
 from networks.pts_encoder.pointnet2 import Pointnet2ClsMSG
 from networks.gf_algorithms.model_modules import *
 from DICArt.networks.ACFM_condition import *
+from DICArt.utils.angle_utils import compute_angle_residual, add_angle_residual, normalize_angles
 from flow_matching.path import CondOTProbPath, AffineProbPath
 from flow_matching.path.scheduler import PolynomialConvexScheduler
 from flow_matching.solver import ODESolver
@@ -38,10 +39,23 @@ class AdaptiveContinuousFlowMatching(nn.Module):
         else:
             print("AdaptiveContinuousFlowMatching: Using noise as x_0 (Standard Mode)")
         
-        # Use 3D Euler angles so that dimensions are aligned with DFM and Top-K info
-        self.rotation_dim = 3
+        # Rotation representation configuration
+        self.rotation_type = cfg.acfm_rotation_type if hasattr(cfg, 'acfm_rotation_type') else 'euler'
+        if self.rotation_type == '6d':
+            self.rotation_dim = 6  # 6D rotation representation
+            print("AdaptiveContinuousFlowMatching: Using 6D rotation representation")
+        else:
+            self.rotation_dim = 3  # Euler angles
+            print("AdaptiveContinuousFlowMatching: Using Euler angle representation")
+        
+        # DFM always outputs 3D Euler angles for Top-K conditions
+        self.cond_rot_dim = 3
         self.translation_dim = 3
+        
+        # Prediction dimensions (what ACFM outputs)
         self.num_dimensions = self.rotation_dim + self.translation_dim
+        # Condition dimensions (what DFM provides)
+        self.cond_num_dimensions = self.cond_rot_dim + self.translation_dim
         
         # Loss weights
         self.velocity_weight = cfg.velocity_weight if hasattr(cfg, 'velocity_weight') else 1.0
@@ -73,37 +87,37 @@ class AdaptiveContinuousFlowMatching(nn.Module):
             raise NotImplementedError
         
         # === Conditional encoders ===
-        # 1. Coarse pose embedding
+        # 1. Coarse pose embedding (uses prediction dimensions)
         self.coarse_pose_embedder = CoarsePoseEmbedder(
             num_dimensions=self.num_dimensions,
             embed_dim=256,
             num_frequencies=64
         ).to(device)
         
-        # 2. Top-K condition encoder
+        # 2. Top-K condition encoder (uses DFM condition dimensions - always 3D Euler)
         self.topk_encoder = TopKConditionEncoder(
             embed_dim=128,
             k=self.k,
-            num_rot_dims=3,  # 3D Euler angles
+            num_rot_dims=self.cond_rot_dim,  # DFM outputs 3D Euler angles
             num_trans_dims=3
         ).to(device)
         
-        # 3. Entropy gate
+        # 3. Entropy gate (uses DFM condition dimensions)
         self.entropy_gate = EntropyGate(
-            num_dimensions=self.num_dimensions
+            num_dimensions=self.cond_num_dimensions
         ).to(device)
         
-        # 4. Entropy encoder
+        # 4. Entropy encoder (uses DFM condition dimensions)
         self.entropy_embedder = nn.Sequential(
-            nn.Linear(self.num_dimensions, 128),
+            nn.Linear(self.cond_num_dimensions, 128),
             nn.LayerNorm(128),
             nn.SiLU(),
             nn.Linear(128, 256)
         ).to(device)
         
-        # 5. Exploration vector aggregation (aggregate exploration vectors for all 6 dims)
+        # 5. Exploration vector aggregation (uses DFM condition dimensions)
         self.exploration_aggregator = nn.Sequential(
-            nn.Linear(self.num_dimensions * 128, 512),
+            nn.Linear(self.cond_num_dimensions * 128, 512),
             nn.LayerNorm(512),
             nn.SiLU(),
             nn.Linear(512, 256)
@@ -379,8 +393,34 @@ class AdaptiveContinuousFlowMatching(nn.Module):
         
         # Always return delta (residual)
         if self.use_coarse_as_x0:
-            # result is the final pose; subtract starting point to get residual
-            return result - coarse_pose
+            if self.rotation_type == '6d':
+                # For 6D: result is absolute pose, compute relative rotation
+                result_rot_6d = result[:, :self.rotation_dim]
+                result_trans = result[:, self.rotation_dim:]
+                coarse_rot_6d = coarse_pose[:, :self.rotation_dim]
+                coarse_trans = coarse_pose[:, self.rotation_dim:]
+                
+                # Convert to rotation matrices
+                result_rot_matrix = pytorch3d_transforms.rotation_6d_to_matrix(result_rot_6d)
+                coarse_rot_matrix = pytorch3d_transforms.rotation_6d_to_matrix(coarse_rot_6d)
+                
+                # Compute relative rotation: R_delta = R_coarse^T @ R_result
+                rot_delta_matrix = torch.matmul(
+                    coarse_rot_matrix.transpose(-2, -1),
+                    result_rot_matrix
+                )
+                
+                # Convert back to 6D
+                rot_residual = torch.cat([
+                    rot_delta_matrix[:, :, 0],
+                    rot_delta_matrix[:, :, 1]
+                ], dim=1)
+                
+                trans_residual = result_trans - coarse_trans
+                return torch.cat([rot_residual, trans_residual], dim=1)
+            else:
+                # For Euler: simple subtraction is fine
+                return result - coarse_pose
         else:
             # result itself is the residual
             return result
@@ -434,15 +474,23 @@ class AdaptiveContinuousFlowMatching(nn.Module):
         trans_loss_raw = F.mse_loss(pred_trans_vel, true_trans_vel, reduction='none') # [bs, 3]
         
         # Apply entropy-weighted loss: higher entropy (higher uncertainty) -> higher weight
-      
+        # Note: entropy is always in condition space (3D Euler + 3D trans)
         entropy_weight_desc = ""
         if 'entropy' in topk_info:
-            entropy = topk_info['entropy'] # [bs, num_dims]
-            rot_entropy = entropy[:, :self.rotation_dim]
-            trans_entropy = entropy[:, self.rotation_dim:]
+            entropy = topk_info['entropy'] # [bs, cond_num_dims] - always 6 (3 Euler + 3 trans)
+            rot_entropy = entropy[:, :self.cond_rot_dim]  # [bs, 3]
+            trans_entropy = entropy[:, self.cond_rot_dim:]  # [bs, 3]
+            
+            # For 6D rotation, we need to map 3D Euler entropy to 6D space
+            if self.rotation_type == '6d':
+                # Average the entropy and expand to match 6D dimensions
+                # Simple strategy: duplicate the entropy values
+                rot_entropy_expanded = rot_entropy.mean(dim=1, keepdim=True).expand(-1, self.rotation_dim)  # [bs, 6]
+            else:
+                rot_entropy_expanded = rot_entropy  # [bs, 3]
             
             # Weight computation: 1 + entropy (simple linear scaling)
-            rot_loss_weight = 1.0 + rot_entropy
+            rot_loss_weight = 1.0 + rot_entropy_expanded
             trans_loss_weight = 1.0 + trans_entropy
             
             rot_loss_raw = rot_loss_raw * rot_loss_weight
@@ -459,8 +507,34 @@ class AdaptiveContinuousFlowMatching(nn.Module):
         )
         
         if self.use_coarse_as_x0:
-            # pred_target is the predicted final pose; convert to delta for loss
-            pred_delta = pred_target - coarse_pose
+            if self.rotation_type == '6d':
+                # For 6D: pred_target is absolute pose, compute relative rotation
+                pred_target_rot_6d = pred_target[:, :self.rotation_dim]
+                pred_target_trans = pred_target[:, self.rotation_dim:]
+                coarse_rot_6d = coarse_pose[:, :self.rotation_dim]
+                coarse_trans = coarse_pose[:, self.rotation_dim:]
+                
+                # Convert to rotation matrices
+                pred_target_rot_matrix = pytorch3d_transforms.rotation_6d_to_matrix(pred_target_rot_6d)
+                coarse_rot_matrix = pytorch3d_transforms.rotation_6d_to_matrix(coarse_rot_6d)
+                
+                # Compute relative rotation: R_delta = R_coarse^T @ R_pred
+                rot_delta_matrix = torch.matmul(
+                    coarse_rot_matrix.transpose(-2, -1),
+                    pred_target_rot_matrix
+                )
+                
+                # Convert back to 6D
+                pred_rot_delta = torch.cat([
+                    rot_delta_matrix[:, :, 0],
+                    rot_delta_matrix[:, :, 1]
+                ], dim=1)
+                
+                pred_trans_delta = pred_target_trans - coarse_trans
+                pred_delta = torch.cat([pred_rot_delta, pred_trans_delta], dim=1)
+            else:
+                # For Euler: simple subtraction is fine
+                pred_delta = pred_target - coarse_pose
         else:
             # pred_target itself is the predicted delta
             pred_delta = pred_target
@@ -469,7 +543,6 @@ class AdaptiveContinuousFlowMatching(nn.Module):
         pred_delta_trans = pred_delta[:, self.rotation_dim:]
         true_delta_rot = delta_gt[:, :self.rotation_dim]
         true_delta_trans = delta_gt[:, self.rotation_dim:]
-        
         rot_pred_loss = F.smooth_l1_loss(pred_delta_rot, true_delta_rot, reduction='none')
         rot_pred_loss = (time_weight * rot_pred_loss).mean()
         
@@ -478,7 +551,6 @@ class AdaptiveContinuousFlowMatching(nn.Module):
         
         pose_pred_loss = rot_pred_loss + trans_pred_loss
         
-        # 总损失
         total_loss = (
             self.rotation_weight * rot_loss +
             self.translation_weight * trans_loss +
@@ -493,4 +565,21 @@ class AdaptiveContinuousFlowMatching(nn.Module):
             f"{entropy_weight_desc}"
         )
         
-        return total_loss, loss_description
+        # Return detailed loss dict for wandb logging
+        loss_dict = {
+            'total_loss': total_loss.item(),
+            'rot_velocity_loss': rot_loss.item(),
+            'trans_velocity_loss': trans_loss.item(),
+            'rot_pred_loss': rot_pred_loss.item(),
+            'trans_pred_loss': trans_pred_loss.item(),
+            'pose_pred_loss': pose_pred_loss.item(),
+        }
+        
+        # Add entropy info if available
+        if 'entropy' in topk_info:
+            entropy = topk_info['entropy']
+            loss_dict['mean_entropy_rot'] = entropy[:, :self.rotation_dim].mean().item()
+            loss_dict['mean_entropy_trans'] = entropy[:, self.rotation_dim:].mean().item()
+            loss_dict['mean_entropy_total'] = entropy.mean().item()
+        
+        return total_loss, loss_description, loss_dict

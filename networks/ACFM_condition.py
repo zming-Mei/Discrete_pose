@@ -102,7 +102,7 @@ class EntropyGate(nn.Module):
             nn.Linear(1, 32),
             nn.SiLU(),
             nn.Linear(32, 1),
-            nn.Sigmoid()  # 输出[0, 1]的门控权重
+            nn.Sigmoid()  # output [0, 1] gate weights
         )
         
         self.register_buffer('dim_type_weights', torch.ones(num_dimensions))

@@ -2,7 +2,7 @@ CUDA_VISIBLE_DEVICES="0" python runners/cotrainer.py \
 --data_path ../ArtImage-High-level/ArtImage \
 --batch_size 96 \
 --total_steps 50000 \
---eval_freq_steps 2000 \
+--eval_freq_steps 1000 \
 --lr 2e-4 \
 --eta_min 3e-6 \
 --rotation_weight 1.0 \
@@ -10,7 +10,7 @@ CUDA_VISIBLE_DEVICES="0" python runners/cotrainer.py \
 --pose_prediction_weight 5.0 \
 --T_dfm 0.1 \
 --T_acfm 0.01 \
---output_dir ckpts/ACFM_lr2e-4_5w_x0False \
+--output_dir ckpts/ACFM_lr2e-4_5w_new_noise \
 --seed 42 \
 --num_bins 72 \
 --cate_id 1 \
@@ -18,10 +18,10 @@ CUDA_VISIBLE_DEVICES="0" python runners/cotrainer.py \
 --num_parts 2 \
 --num_workers 16 \
 --pts_encoder pointnet2 \
---topk_k 10 \
+--topk_k 5 \
 --use_coarse_as_x0 False \
 --freeze_dfm True \
---acfm_rotation_type 6d \
+--acfm_rotation_type euler \
 --dfm_pretrained_path ckpts/DFM_lr5e-4_8w_72bins_0_1_0.1_new_attention/step_80000_angle_4.8916_trans_0.0484.pt \
 --is_train
 

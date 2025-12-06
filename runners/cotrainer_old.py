@@ -116,39 +116,6 @@ class TwoStageTrainer:
             return torch.cat([coarse_axis_angle, coarse_trans], dim=1)
         else:  # euler
             return torch.cat([coarse_angles, coarse_trans], dim=1)
-
-    def _stat_bin_diff(self, coarse_bins, gt_pose_6d):
-        from networks.gf_algorithms.discrete_angle import discretize_euler_angles
-        from networks.gf_algorithms.discrete_number import translation_to_bins
-
-        # GT pose processing
-        gt_rot_6d = gt_pose_6d[:, :6]
-        gt_trans = gt_pose_6d[:, 6:]
-        
-        # Rotation to bins
-        gt_rot_matrix = pytorch3d_transforms.rotation_6d_to_matrix(gt_rot_6d)
-        gt_euler = pytorch3d_transforms.matrix_to_euler_angles(gt_rot_matrix, convention='ZYX')
-        gt_angle_bins = discretize_euler_angles(gt_euler, self.dfm.num_bins)
-        
-        # Translation to bins
-        gt_trans_bins = translation_to_bins(gt_trans, self.translation_status, self.dfm.num_bins)
-        
-        # Combine
-        gt_bins = torch.cat([gt_angle_bins, gt_trans_bins], dim=1)
-        
-        # Calc diff
-        diff = torch.abs(coarse_bins - gt_bins)
-        total = diff.numel()
-        
-        # Stats
-        r0 = (diff == 0).sum().item() / total
-        r1 = (diff == 1).sum().item() / total
-        r2 = (diff == 2).sum().item() / total
-        r3 = (diff == 3).sum().item() / total
-        r4 = (diff == 4).sum().item() / total
-        
-        print(f"Bin Diff Distribution - 0: {r0:.4f}, 1: {r1:.4f}, 2: {r2:.4f}, 3: {r3:.4f}, 4: {r4:.4f}")
-
     def _transform_pointcloud_by_pose(self, pts, pose):
         """
         Transform point cloud by inverse of pose.
@@ -254,7 +221,7 @@ class TwoStageTrainer:
         rot_part_6d = batch_sample['zero_mean_gt_pose'][:, :6].to(self.device)
         trans_part = batch_sample['zero_mean_gt_pose'][:, -3:].to(self.device)
         
-        # Extract point cloud features for Stage 1
+        # Extract point cloud features
         pts_feat = self.dfm.extract_pts_feature(batch_sample).to(self.device)
         
         # Stage 1: DFM prediction
@@ -262,21 +229,19 @@ class TwoStageTrainer:
             topk_info = self.dfm.predict_coarse_pose(pts_feat, step_size=self.cfg.T_dfm, k=self.k)
             coarse_pose_continuous = self._bins_to_continuous_pose(topk_info['coarse_pose'])
         
-        # Transform point cloud by coarse pose (inverse transform)
         pts_original = batch_sample['zero_mean_pts'].to(self.device)  # [bs, num_points, 3]
         pts_transformed = self._transform_pointcloud_by_pose(pts_original, coarse_pose_continuous)
         
         # Extract features from transformed point cloud for Stage 2
         pts_feat_transformed = self.acfm.extract_pts_feature(pts_transformed).to(self.device)
-        
-        # Stage 2: Compute GT residual (delta from coarse to GT)
-        delta_gt, _ = self._compute_residual_gt(
+        # Stage 2: Compute GT residual and ACFM loss
+        delta_gt, coarse_pose_for_loss = self._compute_residual_gt(
             rot_part_6d, trans_part, coarse_pose_continuous
         )
         
-        # ACFM loss: predict residual from transformed point cloud
-        # The residual is what we need to add to coarse_pose to get GT pose
-        acfm_loss, acfm_loss_desc, loss_dict = self.acfm.loss(delta_gt, pts_feat_transformed)
+        acfm_loss, acfm_loss_desc, loss_dict = self.acfm.loss(
+            delta_gt, pts_feat_transformed, coarse_pose_for_loss, topk_info
+        )
         
         # Backward and optimize
         self.optimizer.zero_grad()
@@ -296,7 +261,7 @@ class TwoStageTrainer:
         return acfm_loss.item(), acfm_loss_desc, loss_dict
     
     def eval_step(self, batch_sample):
-        """Evaluation step: compute rotation and translation errors for both stages."""
+        """Evaluation step: compute rotation and translation errors."""
         self.dfm.eval()
         self.acfm.eval()
         
@@ -306,13 +271,12 @@ class TwoStageTrainer:
             trans_part = batch_sample['zero_mean_gt_pose'][:, -3:].to(self.device)
             gt_rot_matrix = pytorch3d_transforms.rotation_6d_to_matrix(rot_part_6d)
             
-            # Extract point cloud features for Stage 1
+            # Extract point cloud features
             pts_feat = self.dfm.extract_pts_feature(batch_sample).to(self.device)
-            
+            #pts_acfm_feat = self.acfm.extract_pts_feature(batch_sample).to(self.device)
             # Stage 1: DFM prediction
             topk_info = self.dfm.predict_coarse_pose(pts_feat, step_size=self.cfg.T_dfm, k=self.k)
             coarse_pose_continuous = self._bins_to_continuous_pose(topk_info['coarse_pose'])
-            _status = self._stat_bin_diff(topk_info['coarse_pose'], rot_part_6d)
             
             # Compute Stage 1 errors (coarse prediction)
             if self.rotation_type == 'axis_angle':
@@ -326,18 +290,22 @@ class TwoStageTrainer:
             
             coarse_diff_angle = rot_diff_degree(coarse_rot_matrix, gt_rot_matrix)
             coarse_diff_trans = torch.norm(coarse_trans - trans_part, dim=1)
-            
             # Transform point cloud by coarse pose (inverse transform)
             pts_original = batch_sample['zero_mean_pts'].to(self.device)
             pts_transformed = self._transform_pointcloud_by_pose(pts_original, coarse_pose_continuous)
             
+            
+
             # Extract features from transformed point cloud for Stage 2
             pts_feat_transformed = self.acfm.extract_pts_feature(pts_transformed).to(self.device)
       
-            # Stage 2: ACFM refinement - predict residual
-            delta_pred = self.acfm.sample(pts_feat_transformed, step_size=self.cfg.T_acfm, method='euler')
+            # Stage 2: ACFM refinement
+            delta_pred = self.acfm.sample(
+                pts_feat_transformed, coarse_pose_continuous, topk_info,
+                step_size=self.cfg.T_acfm, method='euler'
+            )
             
-            # Reconstruct final pose: coarse + residual
+            # Reconstruct final pose
             pred_rot_matrix, pred_trans = self._reconstruct_final_pose(delta_pred, coarse_pose_continuous)
             
             # Compute Stage 2 errors (refined prediction)

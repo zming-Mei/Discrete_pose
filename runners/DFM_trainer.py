@@ -372,8 +372,8 @@ def main():
     print('test_set: ', len(test_loader))
     
     # Translation statistics for normalization/denormalization
-    trans_stats = [-0.3785014748573303, 0.39416784048080444, -0.4042277932167053, 0.39954620599746704, -0.30842161178588867, 0.7598943710327148]
-    #trans_stats = get_dataset_translation_min_max(train_loader, cfg)
+    #trans_stats = [-0.3785014748573303, 0.39416784048080444, -0.4042277932167053, 0.39954620599746704, -0.30842161178588867, 0.7598943710327148]
+    trans_stats = get_dataset_translation_min_max(train_loader, cfg)
 
     # Start training
     train_data(cfg, train_loader, val_loader, test_loader, trans_stats)

@@ -31,6 +31,9 @@ class MetricsTracker:
         self.total_samples = 0
         self.batch_count = 0
         
+        self.total_residual_rot_abs_sum = 0.0
+        self.total_residual_trans_abs_sum = 0.0
+        
         # Angle threshold statistics (degrees)
         self.angle_thresholds = {5: 0, 10: 0, 20: 0}
         self.coarse_angle_thresholds = {5: 0, 10: 0, 20: 0}
@@ -38,7 +41,7 @@ class MetricsTracker:
         self.trans_thresholds = {2: 0, 5: 0, 10: 0}
         self.coarse_trans_thresholds = {2: 0, 5: 0, 10: 0}
     
-    def update(self, angle_errors, trans_errors, coarse_angle_errors, coarse_trans_errors):
+    def update(self, angle_errors, trans_errors, coarse_angle_errors, coarse_trans_errors, pred_delta_rot=None, pred_delta_trans=None):
         """Update statistics with new batch results"""
         batch_size = angle_errors.size(0)
         self.total_samples += batch_size
@@ -49,6 +52,10 @@ class MetricsTracker:
         self.total_trans_error += trans_errors.mean().item()
         self.total_coarse_angle_error += coarse_angle_errors.mean().item()
         self.total_coarse_trans_error += coarse_trans_errors.mean().item()
+
+        if pred_delta_rot is not None and pred_delta_trans is not None:
+            self.total_residual_rot_abs_sum += pred_delta_rot.abs().sum().item()
+            self.total_residual_trans_abs_sum += pred_delta_trans.abs().sum().item()
         
         # Count samples within thresholds (ACFM refined)
         for threshold in self.angle_thresholds.keys():
@@ -94,12 +101,17 @@ class MetricsTracker:
         avg_coarse_angle = self.total_coarse_angle_error / self.batch_count
         avg_coarse_trans = self.total_coarse_trans_error / self.batch_count
         
+        avg_residual_rot = self.total_residual_rot_abs_sum / (self.total_samples * 3) if self.total_samples > 0 else 0
+        avg_residual_trans = self.total_residual_trans_abs_sum / (self.total_samples * 3) if self.total_samples > 0 else 0
+
         return {
             'total_samples': self.total_samples,
             'avg_angle': avg_angle,
             'avg_trans': avg_trans,
             'avg_coarse_angle': avg_coarse_angle,
             'avg_coarse_trans': avg_coarse_trans,
+            'avg_residual_rot': avg_residual_rot,
+            'avg_residual_trans': avg_residual_trans,
             'angle_ratios': {t: count / self.total_samples 
                            for t, count in self.angle_thresholds.items()},
             'trans_ratios': {t: count / self.total_samples 
@@ -165,6 +177,10 @@ class MetricsTracker:
         print(f"\n【Improvement】")
         print(f"Rotation Error Improvement: {summary['improvement_angle']:.4f}° ({summary['improvement_angle']/summary['avg_coarse_angle']*100:.2f}%)")
         print(f"Translation Error Improvement: {summary['improvement_trans']:.4f}m ({summary['improvement_trans']/summary['avg_coarse_trans']*100:.2f}%)")
+        
+        print(f"\n【ACFM Predicted Residual Statistics】")
+        print(f"Average Predicted Rotation Residual (Abs Mean per dim): {summary['avg_residual_rot']:.4f} rad ({np.degrees(summary['avg_residual_rot']):.4f}°)")
+        print(f"Average Predicted Translation Residual (Abs Mean per dim): {summary['avg_residual_trans']:.4f} m")
         print("=" * 80)
 
 
@@ -288,7 +304,7 @@ class ACFMEvaluator:
             # Compute translation error (meters)
             trans_errors = torch.norm(pred_trans - gt_trans, dim=1)
             
-            return angle_errors, trans_errors, coarse_angle_errors, coarse_trans_errors
+            return angle_errors, trans_errors, coarse_angle_errors, coarse_trans_errors, pred_angles_delta, pred_trans_delta
 
 
 def evaluate_model(cfg, test_loader, trans_stats):
@@ -317,10 +333,10 @@ def evaluate_model(cfg, test_loader, trans_stats):
         
         with torch.no_grad():
             # Perform evaluation step
-            angle_errors, trans_errors, coarse_angle_errors, coarse_trans_errors = evaluator.test_step(test_batch)
+            angle_errors, trans_errors, coarse_angle_errors, coarse_trans_errors, pred_delta_rot, pred_delta_trans = evaluator.test_step(test_batch)
             
             # Update metrics
-            metrics.update(angle_errors, trans_errors, coarse_angle_errors, coarse_trans_errors)
+            metrics.update(angle_errors, trans_errors, coarse_angle_errors, coarse_trans_errors, pred_delta_rot, pred_delta_trans)
             
             # Print batch statistics
             batch_stats = metrics.get_batch_stats(angle_errors, trans_errors, 

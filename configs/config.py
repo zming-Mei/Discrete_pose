@@ -1,5 +1,16 @@
 import argparse
 
+def str2bool(v):
+    """Convert string to boolean for argparse"""
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
 def get_config():
     parser = argparse.ArgumentParser()
     
@@ -65,14 +76,16 @@ def get_config():
     parser.add_argument('--is_train', default=False, action='store_true')
     parser.add_argument('--saved_model_name', type=str, default=None)
     """ co-training """
-    parser.add_argument('--use_coarse_as_x0', default=False)
-    parser.add_argument('--freeze_dfm', default=True)
+    parser.add_argument('--use_coarse_as_x0', type=str2bool, default=False)
+    parser.add_argument('--freeze_dfm', type=str2bool, default=True)
     parser.add_argument('--topk_k', type=int, default=10)
     parser.add_argument('--dfm_pretrained_path', type=str, default=None)
     parser.add_argument('--acfm_pretrained_path', type=str, default=None)
     parser.add_argument('--dfm_cache_path', type=str, default=None, help='Path to precomputed DFM cache for faster training')
-    parser.add_argument('--acfm_rotation_type', type=str, default='euler', choices=['euler', '6d'], 
+    parser.add_argument('--acfm_rotation_type', type=str, default='euler', choices=['euler', '6d', 'axis_angle'], 
                         help='Rotation representation for ACFM output: euler (3D) or 6d (6D rotation)')
+    parser.add_argument('--rotation_scale', type=float, default=100.0)
+    parser.add_argument('--translation_scale', type=float, default=100.0)
     """ testing """
     parser.add_argument('--eval', default=False, action='store_true')
     parser.add_argument('--pred', default=False, action='store_true')

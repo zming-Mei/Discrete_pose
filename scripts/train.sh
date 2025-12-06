@@ -8,9 +8,9 @@ CUDA_VISIBLE_DEVICES="0" python runners/DFM_trainer.py \
 --mse_weight 0 \
 --kl_weight 1 \
 --L1_weight 0.1 \
---num_bins 360 \
+--num_bins 72 \
 --T_dfm 0.01 \
---output_dir ckpts/DFM_lr5e-4_8w_360bins_0_1_0.1_attention_n2 \
+--output_dir ckpts/DFM_lr5e-4_8w_72bins_zero_mean_pts \
 --eval_freq_steps 5000 \
 --seed 42 \
 --cate_id 1 \

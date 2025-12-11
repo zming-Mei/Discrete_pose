@@ -67,7 +67,7 @@ def get_config():
     parser.add_argument('--eval_freq', type=int, default=100) 
     parser.add_argument('--eval_freq_steps', type=int, default=1000) 
     parser.add_argument('--grad_clip', type=float, default=1.)
-    parser.add_argument('--ema_rate', type=float, default=0.999)
+    parser.add_argument('--ema_rate', type=float, default=0.995)
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--eta_min', type=float, default=1e-5)
     parser.add_argument('--warmup', type=int, default=100)
@@ -84,8 +84,8 @@ def get_config():
     parser.add_argument('--dfm_cache_path', type=str, default=None, help='Path to precomputed DFM cache for faster training')
     parser.add_argument('--acfm_rotation_type', type=str, default='euler', choices=['euler', '6d', 'axis_angle'], 
                         help='Rotation representation for ACFM output: euler (3D) or 6d (6D rotation)')
-    parser.add_argument('--rotation_scale', type=float, default=100.0)
-    parser.add_argument('--translation_scale', type=float, default=100.0)
+    parser.add_argument('--filter_bad_data', type=str2bool, default=True)
+    parser.add_argument('--pts_transform', type=str2bool, default=False)
     """ testing """
     parser.add_argument('--eval', default=False, action='store_true')
     parser.add_argument('--pred', default=False, action='store_true')

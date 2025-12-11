@@ -11,12 +11,13 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from configs.config import get_config
 from utils.metrics import rot_diff_degree
 from networks.discrete_flow_matching import DiscreteFlowMatching
-from networks.adaptive_continuous_flow_matching import AdaptiveContinuousFlowMatching
+from networks.Adaptive_continuous_flow_matching import AdaptiveContinuousFlowMatching
 from datasets.dataloader import get_data_loaders_from_cfg, process_batch
 import pytorch3d.transforms as pytorch3d_transforms
 from networks.gf_algorithms.discrete_angle import euler_angles_from_bins
 from networks.gf_algorithms.discrete_number import bins_to_numbers
 from networks.gf_algorithms.discrete_number import get_dataset_translation_min_max
+from networks.gf_algorithms.ema import ExponentialMovingAverage
 
 class TwoStageTrainer:
     """Two-stage trainer: DFM + ACFM"""
@@ -25,15 +26,11 @@ class TwoStageTrainer:
         self.cfg = cfg
         self.device = cfg.device
         self.k = cfg.topk_k if hasattr(cfg, 'topk_k') else 10
-        
-        # Translation statistics for bins_to_numbers conversion
-        # If not provided, use default range [-1, 1] for each dimension
-        if translation_status is None:
-            self.translation_status = [-1.0, 1.0, -1.0, 1.0, -1.0, 1.0]
-            print("Warning: Using default translation_status [-1, 1] for all dimensions")
-        else:
-            self.translation_status = translation_status
-            print(f"Using provided translation_status: {translation_status}")
+        self.filter_bad_data = cfg.filter_bad_data if hasattr(cfg, 'filter_bad_data') else False
+        self.filter_angle_threshold = 10.0 # degrees
+        self.filter_trans_threshold = 0.1 # meters (10cm)
+        self.translation_status = translation_status
+        self.pts_transform = cfg.pts_transform if hasattr(cfg, 'pts_transform') else False
         
         # Stage 1: DFM (can be frozen)
         self.dfm = DiscreteFlowMatching(cfg, device=self.device).to(self.device)
@@ -54,13 +51,9 @@ class TwoStageTrainer:
         # Whether to freeze DFM
         self.freeze_dfm = cfg.freeze_dfm
         
-        # Config for starting point (logging purpose)
-        self.use_coarse_as_x0 = cfg.use_coarse_as_x0 if hasattr(cfg, 'use_coarse_as_x0') else False
-        print(f"TwoStageTrainer: use_coarse_as_x0 = {self.use_coarse_as_x0}")
-        
-        # Rotation representation (only euler and axis_angle supported)
+        # Rotation representation (euler, axis_angle, 6d supported)
         self.rotation_type = cfg.acfm_rotation_type if hasattr(cfg, 'acfm_rotation_type') else 'euler'
-        assert self.rotation_type in ['euler', 'axis_angle'], f"Unsupported rotation_type: {self.rotation_type}"
+        assert self.rotation_type in ['euler', 'axis_angle', '6d'], f"Unsupported rotation_type: {self.rotation_type}"
         print(f"TwoStageTrainer: rotation_type = {self.rotation_type}")
         
         if self.freeze_dfm:
@@ -78,24 +71,24 @@ class TwoStageTrainer:
                 weight_decay=1e-6
             )
         else:
-            # Joint training
             self.optimizer = torch.optim.RAdam(
                 list(self.dfm.parameters()) + list(self.acfm.parameters()),
                 lr=cfg.lr,
                 betas=(0.95, 0.999),
                 weight_decay=1e-6
             )
+        total_steps = cfg.total_steps if hasattr(cfg, 'total_steps') else None
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer,
+            T_max=total_steps,
+            eta_min=cfg.eta_min
+        )
         
-        # Learning rate scheduler
-        total_steps = cfg.total_steps if hasattr(cfg, 'total_steps') and cfg.total_steps is not None else None
-        if total_steps is not None:
-            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                self.optimizer, T_max=total_steps, eta_min=cfg.eta_min
-            )
-        else:
-            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                self.optimizer, T_max=cfg.n_epochs, eta_min=cfg.eta_min
-            )
+        # EMA
+        self.ema = ExponentialMovingAverage(
+            self.acfm.parameters() if self.freeze_dfm else list(self.dfm.parameters()) + list(self.acfm.parameters()),
+            decay=cfg.ema_rate if hasattr(cfg, 'ema_rate') else 0.995
+        )
     
     def _bins_to_continuous_pose(self, coarse_bins):
         """Convert bin indices to continuous pose values."""
@@ -108,29 +101,41 @@ class TwoStageTrainer:
             self.translation_status, 
             self.dfm.num_bins
         )
-        
-        # Convert to target representation
         if self.rotation_type == 'axis_angle':
             coarse_rot_matrix = pytorch3d_transforms.euler_angles_to_matrix(coarse_angles, convention='ZYX')
             coarse_axis_angle = pytorch3d_transforms.so3_log_map(coarse_rot_matrix)
             return torch.cat([coarse_axis_angle, coarse_trans], dim=1)
+        elif self.rotation_type == '6d':
+            coarse_rot_matrix = pytorch3d_transforms.euler_angles_to_matrix(coarse_angles, convention='ZYX')
+            coarse_rot_6d = pytorch3d_transforms.matrix_to_rotation_6d(coarse_rot_matrix)
+            return torch.cat([coarse_rot_6d, coarse_trans], dim=1)
         else:  # euler
             return torch.cat([coarse_angles, coarse_trans], dim=1)
+
+    def _get_gt_continuous_pose(self, rot_part_6d, trans_part):
+        """Convert GT 6D pose to continuous representation (Euler/AxisAngle/6D + Trans)."""
+        if self.rotation_type == 'axis_angle':
+            gt_rot_matrix = pytorch3d_transforms.rotation_6d_to_matrix(rot_part_6d)
+            gt_axis_angle = pytorch3d_transforms.so3_log_map(gt_rot_matrix)
+            return torch.cat([gt_axis_angle, trans_part], dim=1)
+        elif self.rotation_type == '6d':
+            # 直接使用 6D rotation
+            return torch.cat([rot_part_6d, trans_part], dim=1)
+        else:  # euler
+            gt_rot_matrix = pytorch3d_transforms.rotation_6d_to_matrix(rot_part_6d)
+            gt_angles = pytorch3d_transforms.matrix_to_euler_angles(gt_rot_matrix, convention='ZYX')
+            return torch.cat([gt_angles, trans_part], dim=1)
+    
     def _transform_pointcloud_by_pose(self, pts, pose):
-        """
-        Transform point cloud by inverse of pose.
-        
-        Args:
-            pts: [bs, num_points, 3] point cloud in camera frame
-            pose: [bs, 6] pose (rotation + translation) for euler/axis_angle
-            
-        Returns:
-            pts_transformed: [bs, num_points, 3] transformed point cloud
-        """
+
         if self.rotation_type == 'axis_angle':
             axis_angle = pose[:, :3]
             trans = pose[:, 3:]
             rot_matrix = pytorch3d_transforms.so3_exp_map(axis_angle)
+        elif self.rotation_type == '6d':
+            rot_6d = pose[:, :6]
+            trans = pose[:, 6:]
+            rot_matrix = pytorch3d_transforms.rotation_6d_to_matrix(rot_6d)
         elif self.rotation_type == 'euler':
             angles = pose[:, :3]
             trans = pose[:, 3:]
@@ -139,185 +144,196 @@ class TwoStageTrainer:
             )
         else:
             raise ValueError(f"Unsupported rotation_type: {self.rotation_type}")
-        
-        # Inverse transform: P' = R^T @ (P - t)
-        pts_transformed = torch.matmul((pts - trans.unsqueeze(1)), rot_matrix.transpose(-2, -1))
+        # Forward transform: P' = R @ P + t
+        # Note: For row vectors, this is P @ R^T + t
+        pts_transformed = torch.matmul(pts, rot_matrix.transpose(-2, -1)) + trans.unsqueeze(1)
         
         return pts_transformed
 
-    def _compute_residual_gt(self, rot_part_6d, trans_part, coarse_pose_continuous):
-        """Compute ground truth residual and coarse_pose_for_loss based on rotation type."""
-        bs = rot_part_6d.shape[0]
-        
+    def _filter_bad_data(self, batch_sample, pts_feat, topk_info):
+
+        # Extract GT pose from batch_sample
+        rot_part_6d = batch_sample['zero_mean_gt_pose'][:, :6].to(self.device)
+        trans_part = batch_sample['zero_mean_gt_pose'][:, -3:].to(self.device)
+        pose_gt = self._get_gt_continuous_pose(rot_part_6d, trans_part)    
+        gt_rot_matrix = pytorch3d_transforms.rotation_6d_to_matrix(rot_part_6d)
+        coarse_pose_continuous = self._bins_to_continuous_pose(topk_info['coarse_pose'])
+        # Compute errors for DFM
         if self.rotation_type == 'axis_angle':
-            gt_rot_matrix = pytorch3d_transforms.rotation_6d_to_matrix(rot_part_6d)
-            gt_axis_angle = pytorch3d_transforms.so3_log_map(gt_rot_matrix)
-            
-            coarse_axis_angle = coarse_pose_continuous[:, :3]
+            coarse_rot_matrix = pytorch3d_transforms.so3_exp_map(coarse_pose_continuous[:, :3])
             coarse_trans = coarse_pose_continuous[:, 3:]
-            
-            coarse_rot_matrix = pytorch3d_transforms.so3_exp_map(coarse_axis_angle)
-            rot_delta_matrix = torch.matmul(
-                coarse_rot_matrix.transpose(-2, -1),
-                gt_rot_matrix
+        elif self.rotation_type == '6d':
+            coarse_rot_matrix = pytorch3d_transforms.rotation_6d_to_matrix(coarse_pose_continuous[:, :6])
+            coarse_trans = coarse_pose_continuous[:, 6:]
+        else:  # euler
+            coarse_rot_matrix = pytorch3d_transforms.euler_angles_to_matrix(
+                coarse_pose_continuous[:, :3], convention='ZYX'
             )
-            
-            rot_residual = pytorch3d_transforms.so3_log_map(rot_delta_matrix)
-            trans_residual = trans_part - coarse_trans
-            delta_gt = torch.cat([rot_residual, trans_residual], dim=1)
-            
-            # Zero axis-angle for loss computation
-            zero_axis_angle = torch.zeros(bs, 3, device=self.device)
-            zero_trans = torch.zeros(bs, 3, device=self.device)
-            coarse_pose_for_loss = torch.cat([zero_axis_angle, zero_trans], dim=1)
-            
-        else:  # Euler
-            gt_rot_matrix = pytorch3d_transforms.rotation_6d_to_matrix(rot_part_6d)
-            gt_angles = pytorch3d_transforms.matrix_to_euler_angles(gt_rot_matrix, convention='ZYX')
-            
-            coarse_angles = coarse_pose_continuous[:, :3]
             coarse_trans = coarse_pose_continuous[:, 3:]
-            
-            angle_residual = gt_angles - coarse_angles
-            trans_residual = trans_part - coarse_trans
-            delta_gt = torch.cat([angle_residual, trans_residual], dim=1)
-            
-            coarse_pose_for_loss = coarse_pose_continuous
+
+        # Compute errors
+        coarse_diff_angle = rot_diff_degree(coarse_rot_matrix, gt_rot_matrix)
+        coarse_diff_trans = torch.norm(coarse_trans - trans_part, dim=1)
         
-        return delta_gt, coarse_pose_for_loss
-    
-    def _reconstruct_final_pose(self, delta_pred, coarse_pose_continuous):
-        """Reconstruct final pose from predicted residual and coarse pose."""
-        if self.rotation_type == 'axis_angle':
-            pred_axis_angle_delta = delta_pred[:, :3]
-            pred_trans_delta = delta_pred[:, 3:]
-            coarse_axis_angle = coarse_pose_continuous[:, :3]
-            coarse_trans = coarse_pose_continuous[:, 3:]
-            
-            coarse_rot_matrix = pytorch3d_transforms.so3_exp_map(coarse_axis_angle)
-            delta_rot_matrix = pytorch3d_transforms.so3_exp_map(pred_axis_angle_delta)
-            
-            pred_rot_matrix = torch.matmul(coarse_rot_matrix, delta_rot_matrix)
-            pred_trans = coarse_trans + pred_trans_delta
-            
-        else:  # Euler
-            pred_angles_delta = delta_pred[:, :3]
-            pred_trans_delta = delta_pred[:, 3:]
-            coarse_angles = coarse_pose_continuous[:, :3]
-            coarse_trans = coarse_pose_continuous[:, 3:]
-            
-            pred_angles = coarse_angles + pred_angles_delta
-            pred_trans = coarse_trans + pred_trans_delta
-            
-            pred_rot_matrix = pytorch3d_transforms.euler_angles_to_matrix(
-                pred_angles, convention='ZYX'
-            )
-        
-        return pred_rot_matrix, pred_trans
-    
+        # Mask: Good data only
+        mask = (coarse_diff_angle <= self.filter_angle_threshold) & (coarse_diff_trans <= self.filter_trans_threshold)
+        mask_sum = mask.sum()
+
+        filtered_pose_gt = pose_gt[mask]
+        filtered_pts_feat = pts_feat[mask]
+
+        filtered_topk_info = {}
+        for k, v in topk_info.items():
+            if isinstance(v, torch.Tensor):
+                filtered_topk_info[k] = v[mask]
+            else:
+                filtered_topk_info[k] = v
+                
+        return {
+            'pose_gt': filtered_pose_gt,
+            'pts_feat': filtered_pts_feat,
+            'topk_info': filtered_topk_info,
+            'mask_sum': mask_sum
+        }
+
     def train_step(self, batch_sample):
-        """Two-stage training step: DFM predicts coarse pose, ACFM predicts residual."""
+        """Two-stage training step."""
         # Extract GT pose
         rot_part_6d = batch_sample['zero_mean_gt_pose'][:, :6].to(self.device)
         trans_part = batch_sample['zero_mean_gt_pose'][:, -3:].to(self.device)
-        
-        # Extract point cloud features
-        pts_feat = self.dfm.extract_pts_feature(batch_sample).to(self.device)
-        
-        # Stage 1: DFM prediction
+        pose_gt = self._get_gt_continuous_pose(rot_part_6d, trans_part)
+
+        # Extract point cloud for DFM
+        pts = batch_sample['pts'].to(self.device)
+        pts_original = batch_sample['zero_mean_pts'].to(self.device)
+        dfm_pts_feat = self.dfm.extract_pts_feature(pts).to(self.device)
+
+        # Stage 1: DFM prediction and Top-K extraction
         with torch.no_grad() if self.freeze_dfm else torch.enable_grad():
-            topk_info = self.dfm.predict_coarse_pose(pts_feat, step_size=self.cfg.T_dfm, k=self.k)
+            topk_info = self.dfm.predict_coarse_pose(dfm_pts_feat, step_size=self.cfg.T_dfm, k=self.k)
             coarse_pose_continuous = self._bins_to_continuous_pose(topk_info['coarse_pose'])
         
-        pts_original = batch_sample['zero_mean_pts'].to(self.device)  # [bs, num_points, 3]
-        pts_transformed = self._transform_pointcloud_by_pose(pts_original, coarse_pose_continuous)
+        # Transform point cloud by coarse pose (inverse transform) for ACFM
+        if self.pts_transform:
+            pts_transformed = self._transform_pointcloud_by_pose(pts_original, coarse_pose_continuous)
+        else:
+            pts_transformed = pts_original
+
+        # Extract point cloud features for ACFM
+        acfm_pts_feat = self.acfm.extract_pts_feature(pts_transformed).to(self.device)
         
-        # Extract features from transformed point cloud for Stage 2
-        pts_feat_transformed = self.acfm.extract_pts_feature(pts_transformed).to(self.device)
-        # Stage 2: Compute GT residual and ACFM loss
-        delta_gt, coarse_pose_for_loss = self._compute_residual_gt(
-            rot_part_6d, trans_part, coarse_pose_continuous
-        )
+        # --- Data Filtering Logic ---
+        if self.filter_bad_data:
+            filter_result = self._filter_bad_data(
+                batch_sample, acfm_pts_feat, topk_info
+            )
         
-        acfm_loss, acfm_loss_desc, loss_dict = self.acfm.loss(
-            delta_gt, pts_feat_transformed, coarse_pose_for_loss, topk_info
-        )
+            if filter_result['mask_sum'] == 0:
+                print("Warning: All data filtered out in this batch!")
+                return 0.0, "Skipped (Filtered)", {}
+
+                
+            pose_gt = filter_result['pose_gt']
+            acfm_pts_feat = filter_result['pts_feat']
+            topk_info = filter_result['topk_info']
+        
+        # ACFM loss: direct prediction from original points + topk condition
+        acfm_loss, acfm_loss_desc, loss_dict = self.acfm.loss(pose_gt, acfm_pts_feat, topk_info, self.translation_status)
         
         # Backward and optimize
         self.optimizer.zero_grad()
         acfm_loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(self.acfm.parameters(), 1.0)
         self.optimizer.step()
+        self.ema.update(self.acfm.parameters() if self.freeze_dfm else list(self.dfm.parameters()) + list(self.acfm.parameters()))
         
         # Add training statistics to loss dict
         with torch.no_grad():
             loss_dict['grad_norm'] = grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm
-            rot_dim = 3  # Both euler and axis_angle use 3 dimensions
-            loss_dict['residual_rot_mean'] = torch.abs(delta_gt[:, :rot_dim]).mean().item()
-            loss_dict['residual_trans_mean'] = torch.abs(delta_gt[:, rot_dim:]).mean().item()
-            loss_dict['residual_rot_std'] = delta_gt[:, :rot_dim].std().item()
-            loss_dict['residual_trans_std'] = delta_gt[:, rot_dim:].std().item()
-        
         return acfm_loss.item(), acfm_loss_desc, loss_dict
     
     def eval_step(self, batch_sample):
-        """Evaluation step: compute rotation and translation errors."""
+        """Evaluation step: compute rotation and translation errors for both stages."""
         self.dfm.eval()
         self.acfm.eval()
         
-        with torch.no_grad():
-            # Extract GT pose
-            rot_part_6d = batch_sample['zero_mean_gt_pose'][:, :6].to(self.device)
-            trans_part = batch_sample['zero_mean_gt_pose'][:, -3:].to(self.device)
-            gt_rot_matrix = pytorch3d_transforms.rotation_6d_to_matrix(rot_part_6d)
-            
-            # Extract point cloud features
-            pts_feat = self.dfm.extract_pts_feature(batch_sample).to(self.device)
-            #pts_acfm_feat = self.acfm.extract_pts_feature(batch_sample).to(self.device)
-            # Stage 1: DFM prediction
-            topk_info = self.dfm.predict_coarse_pose(pts_feat, step_size=self.cfg.T_dfm, k=self.k)
-            coarse_pose_continuous = self._bins_to_continuous_pose(topk_info['coarse_pose'])
-            
-            # Compute Stage 1 errors (coarse prediction)
-            if self.rotation_type == 'axis_angle':
-                coarse_rot_matrix = pytorch3d_transforms.so3_exp_map(coarse_pose_continuous[:, :3])
-                coarse_trans = coarse_pose_continuous[:, 3:]
-            else:  # euler
-                coarse_rot_matrix = pytorch3d_transforms.euler_angles_to_matrix(
-                    coarse_pose_continuous[:, :3], convention='ZYX'
-                )
-                coarse_trans = coarse_pose_continuous[:, 3:]
-            
-            coarse_diff_angle = rot_diff_degree(coarse_rot_matrix, gt_rot_matrix)
-            coarse_diff_trans = torch.norm(coarse_trans - trans_part, dim=1)
-            # Transform point cloud by coarse pose (inverse transform)
-            pts_original = batch_sample['zero_mean_pts'].to(self.device)
-            pts_transformed = self._transform_pointcloud_by_pose(pts_original, coarse_pose_continuous)
-            
-            
+        # Store current parameters and copy EMA parameters
+        self.ema.store(self.acfm.parameters() if self.freeze_dfm else list(self.dfm.parameters()) + list(self.acfm.parameters()))
+        self.ema.copy_to(self.acfm.parameters() if self.freeze_dfm else list(self.dfm.parameters()) + list(self.acfm.parameters()))
+        
+        try:
+            with torch.no_grad():
+                # Extract GT pose
+                rot_part_6d = batch_sample['zero_mean_gt_pose'][:, :6].to(self.device)
+                trans_part = batch_sample['zero_mean_gt_pose'][:, -3:].to(self.device)
+                gt_rot_matrix = pytorch3d_transforms.rotation_6d_to_matrix(rot_part_6d)
 
-            # Extract features from transformed point cloud for Stage 2
-            pts_feat_transformed = self.acfm.extract_pts_feature(pts_transformed).to(self.device)
-      
-            # Stage 2: ACFM refinement
-            delta_pred = self.acfm.sample(
-                pts_feat_transformed, coarse_pose_continuous, topk_info,
-                step_size=self.cfg.T_acfm, method='euler'
-            )
-            
-            # Reconstruct final pose
-            pred_rot_matrix, pred_trans = self._reconstruct_final_pose(delta_pred, coarse_pose_continuous)
-            
-            # Compute Stage 2 errors (refined prediction)
-            refined_diff_angle = rot_diff_degree(pred_rot_matrix, gt_rot_matrix)
-            refined_diff_trans = torch.norm(pred_trans - trans_part, dim=1)
-            
-            return {
-                'stage1_angle': coarse_diff_angle.mean().item(),
-                'stage1_trans': coarse_diff_trans.mean().item(),
-                'stage2_angle': refined_diff_angle.mean().item(),
-                'stage2_trans': refined_diff_trans.mean().item()
-            }
+                # Extract point cloud
+                pts = batch_sample['pts'].to(self.device)
+                pts_original = batch_sample['zero_mean_pts'].to(self.device)
+                dfm_pts_feat = self.dfm.extract_pts_feature(pts).to(self.device)
+
+                # Stage 1: DFM prediction
+                topk_info = self.dfm.predict_coarse_pose(dfm_pts_feat, step_size=self.cfg.T_dfm, k=self.k)
+                coarse_pose_continuous = self._bins_to_continuous_pose(topk_info['coarse_pose'])
+
+                # Transform point cloud by coarse pose
+                if self.pts_transform:
+                    pts_transformed = self._transform_pointcloud_by_pose(pts_original, coarse_pose_continuous)
+                else:
+                    pts_transformed = pts_original
+                
+                # Extract point cloud features for ACFM
+                acfm_pts_feat = self.acfm.extract_pts_feature(pts_transformed).to(self.device)
+                
+                # Compute Stage 1 errors
+                if self.rotation_type == 'axis_angle':
+                    coarse_rot_matrix = pytorch3d_transforms.so3_exp_map(coarse_pose_continuous[:, :3])
+                    coarse_trans = coarse_pose_continuous[:, 3:]
+                elif self.rotation_type == '6d':
+                    coarse_rot_matrix = pytorch3d_transforms.rotation_6d_to_matrix(coarse_pose_continuous[:, :6])
+                    coarse_trans = coarse_pose_continuous[:, 6:]
+                else:  # euler
+                    coarse_rot_matrix = pytorch3d_transforms.euler_angles_to_matrix(
+                        coarse_pose_continuous[:, :3], convention='ZYX'
+                    )
+                    coarse_trans = coarse_pose_continuous[:, 3:]
+                
+                coarse_diff_angle = rot_diff_degree(coarse_rot_matrix, gt_rot_matrix)
+                coarse_diff_trans = torch.norm(coarse_trans - trans_part, dim=1)
+                
+                # Stage 2: ACFM - Direct Prediction
+                # Note: We use original pts_feat (not transformed)
+                pred_pose = self.acfm.sample(acfm_pts_feat, topk_info, self.translation_status, step_size=self.cfg.T_acfm, method='euler')
+                
+                # Decompose predicted pose
+                if self.rotation_type == 'axis_angle':
+                    pred_rot_matrix = pytorch3d_transforms.so3_exp_map(pred_pose[:, :3])
+                    pred_trans = pred_pose[:, 3:]
+                elif self.rotation_type == '6d':
+                    pred_rot_matrix = pytorch3d_transforms.rotation_6d_to_matrix(pred_pose[:, :6])
+                    pred_trans = pred_pose[:, 6:]
+                else: # Euler
+                    pred_rot_matrix = pytorch3d_transforms.euler_angles_to_matrix(
+                        pred_pose[:, :3], convention='ZYX'
+                    )
+                    pred_trans = pred_pose[:, 3:]
+                
+                # Compute Stage 2 errors
+                refined_diff_angle = rot_diff_degree(pred_rot_matrix, gt_rot_matrix)
+                refined_diff_trans = torch.norm(pred_trans - trans_part, dim=1)
+                
+                result = {
+                    'stage1_angle': coarse_diff_angle.mean().item(),
+                    'stage1_trans': coarse_diff_trans.mean().item(),
+                    'stage2_angle': refined_diff_angle.mean().item(),
+                    'stage2_trans': refined_diff_trans.mean().item()
+                }
+        finally:
+            # Restore original parameters
+            self.ema.restore(self.acfm.parameters() if self.freeze_dfm else list(self.dfm.parameters()) + list(self.acfm.parameters()))
+        
+        return result
 
 
 def train_two_stage(cfg, train_loader, val_loader, test_loader, translation_status=None):
@@ -357,6 +373,7 @@ def train_two_stage(cfg, train_loader, val_loader, test_loader, translation_stat
         
         while current_step < total_steps:
             pbar = tqdm(train_loader, desc=f"Epoch {epoch} (Step {current_step}/{total_steps})")
+            epoch_losses = []
             
             for batch in pbar:
                 if current_step >= total_steps:
@@ -365,6 +382,7 @@ def train_two_stage(cfg, train_loader, val_loader, test_loader, translation_stat
                 batch = process_batch(batch, cfg.device, cfg.pose_mode, mini_batch_size=96, PTS_AUG_PARAMS=None)
                 loss, loss_desc, loss_dict = trainer.train_step(batch)
                 train_losses.append(loss)
+                epoch_losses.append(loss)
                 
                 trainer.scheduler.step()
                 current_step += 1
@@ -387,16 +405,18 @@ def train_two_stage(cfg, train_loader, val_loader, test_loader, translation_stat
                     wandb.log(wandb_log_dict)
                 
                 if current_step % 100 == 0:
-                    avg_loss = np.mean(train_losses[-100:]) if len(train_losses) >= 100 else np.mean(train_losses)
+                    # Filter out zeros from train_losses for avg calc if needed, but usually loss > 0
+                    valid_losses = [l for l in train_losses[-100:] if l > 0]
+                    avg_loss = np.mean(valid_losses) if valid_losses else 0.0
                     wandb.log({"step": current_step, "train/avg_loss_100": avg_loss})
                 
                 if current_step % eval_freq == 0:
+                    # Switch to eval mode
+                    if not trainer.freeze_dfm:
+                        trainer.dfm.eval()
                     trainer.acfm.eval()
-                    stage1_angles = []
-                    stage1_trans = []
-                    stage2_angles = []
-                    stage2_trans = []
                     
+                    stage1_angles, stage1_trans, stage2_angles, stage2_trans = [], [], [], []
                     print(f"\nValidation at step {current_step}...")
                     for val_batch in tqdm(val_loader, desc="Validation"):
                         val_batch = process_batch(val_batch, cfg.device, cfg.pose_mode, mini_batch_size=96, PTS_AUG_PARAMS=None)
@@ -430,14 +450,28 @@ def train_two_stage(cfg, train_loader, val_loader, test_loader, translation_stat
                         "val/trans_improvement": stage1_trans_mean - stage2_trans_mean
                     })
                     
+                    # Save EMA model state
                     save_path = os.path.join(
                         save_dir,
                         f"acfm_step_{current_step}_angle_{stage2_angle_mean:.4f}_trans_{stage2_trans_mean:.4f}.pt"
                     )
+                    # Store current params and copy EMA params for saving
+                    trainer.ema.store(trainer.acfm.parameters() if trainer.freeze_dfm else list(trainer.dfm.parameters()) + list(trainer.acfm.parameters()))
+                    trainer.ema.copy_to(trainer.acfm.parameters() if trainer.freeze_dfm else list(trainer.dfm.parameters()) + list(trainer.acfm.parameters()))
                     torch.save(trainer.acfm.state_dict(), save_path)
-                    print(f"Model saved at step {current_step}")
+                    trainer.ema.restore(trainer.acfm.parameters() if trainer.freeze_dfm else list(trainer.dfm.parameters()) + list(trainer.acfm.parameters()))
+                    print(f"Model (EMA) saved at step {current_step}")
                     
+                    # Switch back to train mode
+                    if not trainer.freeze_dfm:
+                        trainer.dfm.train()
                     trainer.acfm.train()
+            
+            # Print epoch average loss
+            if len(epoch_losses) > 0:
+                epoch_avg_loss = np.mean(epoch_losses)
+                print(f"Epoch {epoch} completed: Average Loss = {epoch_avg_loss:.4f}, Steps in epoch = {len(epoch_losses)}, Total steps = {current_step}/{total_steps}")
+                wandb.log({"epoch": epoch, "epoch_avg_loss": epoch_avg_loss, "step": current_step})
             
             epoch += 1
     
@@ -465,8 +499,6 @@ def main():
     print('test_set: ', len(test_loader))
     
     # Compute translation statistics from training data
-    # This is needed for bins_to_numbers conversion
-
     print("Computing translation statistics from training data...")
     #translation_status = get_dataset_translation_min_max(train_loader, cfg)
     #translation_status = [-0.42640459537506104, 0.4034724235534668, -0.4079521894454956, 0.4090191125869751, -0.31017589569091797, 0.7824592590332031]
@@ -486,6 +518,7 @@ def main():
         "translation_status": translation_status,
         "use_coarse_as_x0": cfg.use_coarse_as_x0 if hasattr(cfg, 'use_coarse_as_x0') else False,
         "acfm_rotation_type": cfg.acfm_rotation_type if hasattr(cfg, 'acfm_rotation_type') else 'euler',
+        "filter_bad_data": cfg.filter_bad_data if hasattr(cfg, 'filter_bad_data') else False,
     }
     
     wandb.init(project="two_stage_6d_pose", config=wandb_config)

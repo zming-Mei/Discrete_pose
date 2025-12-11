@@ -90,7 +90,8 @@ class DiscreteFlowMatching(nn.Module):
 
     def extract_pts_feature(self, data):
 
-        pts = data['pts']
+        # pts = data['pts']
+        pts = data
         if self.cfg.pts_encoder == 'pointnet':
             return self.pts_encoder(pts.permute(0,2,1))
         elif self.cfg.pts_encoder == 'pointnet2':
@@ -299,7 +300,7 @@ class DiscreteFlowMatching(nn.Module):
 
         angle_kl_loss = self.criterion(angle_logits, angle_x1, angle_xt, t)
         trans_kl_loss = self.criterion(trans_logits, trans_x1, trans_xt, t)
-        kl_loss = angle_kl_loss + 1.5*trans_kl_loss
+
         # Compute MSE loss (following discrete diffusion model implementation)
         # Convert softmax probabilities to expected bin values
         probs = F.softmax(posterior_logits, dim=-1)  # [bs, num_dimensions, num_bins]

@@ -9,7 +9,7 @@ env/
 /D3PM_6D
 /wandb
 /tools
-/discrete_diffusion
+/old_code
 .venv/
 .vscode/
 .idea/

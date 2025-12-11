@@ -16,4 +16,4 @@ wandb==0.22.3
 tensorboard==2.17.0
 tensorboardX==2.6.2.2
 pillow==10.4.0
-ipdb==0.2.3
+ipdb==0.13.13

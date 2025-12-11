@@ -20,10 +20,6 @@ pip install torch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0 --index-url https
 ``` bash
 pip install -r requirements.txt 
 ```
-- ### Install flow_matching
-```
-pip install flow_matching
-```
 - ### Install pytorch3d from a local clone
 ``` bash
 git clone https://github.com/facebookresearch/pytorch3d.git

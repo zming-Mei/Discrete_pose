@@ -55,6 +55,8 @@ class TwoStageTrainer:
         self.rotation_type = cfg.acfm_rotation_type if hasattr(cfg, 'acfm_rotation_type') else 'euler'
         assert self.rotation_type in ['euler', 'axis_angle', '6d'], f"Unsupported rotation_type: {self.rotation_type}"
         print(f"TwoStageTrainer: rotation_type = {self.rotation_type}")
+        self.acfm_predict_delta = cfg.acfm_predict_delta if hasattr(cfg, 'acfm_predict_delta') else False
+        print(f"TwoStageTrainer: acfm_predict_delta = {self.acfm_predict_delta}")
         
         if self.freeze_dfm:
             for param in self.dfm.parameters():
@@ -119,7 +121,6 @@ class TwoStageTrainer:
             gt_axis_angle = pytorch3d_transforms.so3_log_map(gt_rot_matrix)
             return torch.cat([gt_axis_angle, trans_part], dim=1)
         elif self.rotation_type == '6d':
-            # 直接使用 6D rotation
             return torch.cat([rot_part_6d, trans_part], dim=1)
         else:  # euler
             gt_rot_matrix = pytorch3d_transforms.rotation_6d_to_matrix(rot_part_6d)
@@ -518,6 +519,7 @@ def main():
         "translation_status": translation_status,
         "use_coarse_as_x0": cfg.use_coarse_as_x0 if hasattr(cfg, 'use_coarse_as_x0') else False,
         "acfm_rotation_type": cfg.acfm_rotation_type if hasattr(cfg, 'acfm_rotation_type') else 'euler',
+        "acfm_predict_delta": cfg.acfm_predict_delta if hasattr(cfg, 'acfm_predict_delta') else False,
         "filter_bad_data": cfg.filter_bad_data if hasattr(cfg, 'filter_bad_data') else False,
     }
     

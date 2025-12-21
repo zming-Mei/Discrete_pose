@@ -8,8 +8,8 @@ CUDA_VISIBLE_DEVICES="0" python runners/eval_acfm.py \
 --T_acfm 0.01 \
 --pts_encoder pointnet2 \
 --topk_k 5 \
---use_coarse_as_x0 True \
+--acfm_rotation_type 6d \
+--pts_transform True \
 --dfm_pretrained_path ckpts/DFM_lr5e-4_8w_72bins_0_1_0.1_new_attention/step_80000_angle_4.8916_trans_0.0484.pt \
---acfm_pretrained_path ckpts/ACFM_noRot_lr2e-4_5w/acfm_step_15000_angle_3.7704_trans_0.0353.pt \
+--acfm_pretrained_path ckpts/ACFM_lr1e-4_5w_new_codebase_1.5_1_0.3_6D/acfm_step_10000_angle_4.7707_trans_0.0432.pt \
 --eval
-

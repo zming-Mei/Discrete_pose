@@ -8,9 +8,9 @@ import random
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from configs.config import get_config
 from utils.metrics import rot_diff_degree
-from utils.angle_utils import compute_angle_residual, add_angle_residual, normalize_angles
 from networks.discrete_flow_matching import DiscreteFlowMatching
-from networks.adaptive_continuous_flow_matching import AdaptiveContinuousFlowMatching
+from networks.Adaptive_continuous_MLP import DirectPoseMLP
+from networks.Adaptive_continuous_flow_matching import AdaptiveContinuousFlowMatching
 from datasets.dataloader import get_data_loaders_from_cfg, process_batch
 import pytorch3d.transforms as pytorch3d_transforms
 from networks.gf_algorithms.discrete_angle import euler_angles_from_bins
@@ -31,9 +31,6 @@ class MetricsTracker:
         self.total_samples = 0
         self.batch_count = 0
         
-        self.total_residual_rot_abs_sum = 0.0
-        self.total_residual_trans_abs_sum = 0.0
-        
         # Angle threshold statistics (degrees)
         self.angle_thresholds = {5: 0, 10: 0, 20: 0}
         self.coarse_angle_thresholds = {5: 0, 10: 0, 20: 0}
@@ -41,7 +38,7 @@ class MetricsTracker:
         self.trans_thresholds = {2: 0, 5: 0, 10: 0}
         self.coarse_trans_thresholds = {2: 0, 5: 0, 10: 0}
     
-    def update(self, angle_errors, trans_errors, coarse_angle_errors, coarse_trans_errors, pred_delta_rot=None, pred_delta_trans=None):
+    def update(self, angle_errors, trans_errors, coarse_angle_errors, coarse_trans_errors):
         """Update statistics with new batch results"""
         batch_size = angle_errors.size(0)
         self.total_samples += batch_size
@@ -52,10 +49,6 @@ class MetricsTracker:
         self.total_trans_error += trans_errors.mean().item()
         self.total_coarse_angle_error += coarse_angle_errors.mean().item()
         self.total_coarse_trans_error += coarse_trans_errors.mean().item()
-
-        if pred_delta_rot is not None and pred_delta_trans is not None:
-            self.total_residual_rot_abs_sum += pred_delta_rot.abs().sum().item()
-            self.total_residual_trans_abs_sum += pred_delta_trans.abs().sum().item()
         
         # Count samples within thresholds (ACFM refined)
         for threshold in self.angle_thresholds.keys():
@@ -100,9 +93,6 @@ class MetricsTracker:
         avg_trans = self.total_trans_error / self.batch_count
         avg_coarse_angle = self.total_coarse_angle_error / self.batch_count
         avg_coarse_trans = self.total_coarse_trans_error / self.batch_count
-        
-        avg_residual_rot = self.total_residual_rot_abs_sum / (self.total_samples * 3) if self.total_samples > 0 else 0
-        avg_residual_trans = self.total_residual_trans_abs_sum / (self.total_samples * 3) if self.total_samples > 0 else 0
 
         return {
             'total_samples': self.total_samples,
@@ -110,8 +100,6 @@ class MetricsTracker:
             'avg_trans': avg_trans,
             'avg_coarse_angle': avg_coarse_angle,
             'avg_coarse_trans': avg_coarse_trans,
-            'avg_residual_rot': avg_residual_rot,
-            'avg_residual_trans': avg_residual_trans,
             'angle_ratios': {t: count / self.total_samples 
                            for t, count in self.angle_thresholds.items()},
             'trans_ratios': {t: count / self.total_samples 
@@ -177,10 +165,6 @@ class MetricsTracker:
         print(f"\n【Improvement】")
         print(f"Rotation Error Improvement: {summary['improvement_angle']:.4f}° ({summary['improvement_angle']/summary['avg_coarse_angle']*100:.2f}%)")
         print(f"Translation Error Improvement: {summary['improvement_trans']:.4f}m ({summary['improvement_trans']/summary['avg_coarse_trans']*100:.2f}%)")
-        
-        print(f"\n【ACFM Predicted Residual Statistics】")
-        print(f"Average Predicted Rotation Residual (Abs Mean per dim): {summary['avg_residual_rot']:.4f} rad ({np.degrees(summary['avg_residual_rot']):.4f}°)")
-        print(f"Average Predicted Translation Residual (Abs Mean per dim): {summary['avg_residual_trans']:.4f} m")
         print("=" * 80)
 
 
@@ -200,6 +184,12 @@ class ACFMEvaluator:
         self.device = cfg.device
         self.trans_stats = trans_stats
         self.k = cfg.topk_k if hasattr(cfg, 'topk_k') else 10
+        self.pts_transform = cfg.pts_transform if hasattr(cfg, 'pts_transform') else False
+        
+        # Rotation representation (euler, axis_angle, 6d supported)
+        self.rotation_type = cfg.acfm_rotation_type if hasattr(cfg, 'acfm_rotation_type') else 'euler'
+        assert self.rotation_type in ['euler', 'axis_angle', '6d'], f"Unsupported rotation_type: {self.rotation_type}"
+        print(f"ACFMEvaluator: rotation_type = {self.rotation_type}")
         
         # Initialize DFM model
         self.dfm = DiscreteFlowMatching(cfg, device=self.device).to(self.device)
@@ -216,9 +206,53 @@ class ACFMEvaluator:
             checkpoint = torch.load(acfm_pretrained_path, map_location=self.device)
             self.acfm.load_state_dict(checkpoint)
             print("ACFM model loaded successfully")
+    
+    def _bins_to_continuous_pose(self, coarse_bins):
+        """Convert bin indices to continuous pose values."""
+        coarse_angle_bins = coarse_bins[:, :3]
+        coarse_angles = euler_angles_from_bins(coarse_angle_bins, self.dfm.num_bins)
+        
+        coarse_trans_bins = coarse_bins[:, 3:]
+        coarse_trans = bins_to_numbers(
+            coarse_trans_bins, 
+            self.trans_stats, 
+            self.dfm.num_bins
+        )
+        if self.rotation_type == 'axis_angle':
+            coarse_rot_matrix = pytorch3d_transforms.euler_angles_to_matrix(coarse_angles, convention='ZYX')
+            coarse_axis_angle = pytorch3d_transforms.so3_log_map(coarse_rot_matrix)
+            return torch.cat([coarse_axis_angle, coarse_trans], dim=1)
+        elif self.rotation_type == '6d':
+            coarse_rot_matrix = pytorch3d_transforms.euler_angles_to_matrix(coarse_angles, convention='ZYX')
+            coarse_rot_6d = pytorch3d_transforms.matrix_to_rotation_6d(coarse_rot_matrix)
+            return torch.cat([coarse_rot_6d, coarse_trans], dim=1)
+        else:  # euler
+            return torch.cat([coarse_angles, coarse_trans], dim=1)
+    
+    def _transform_pointcloud_by_pose(self, pts, pose):
+        """Transform point cloud by pose."""
+        if self.rotation_type == 'axis_angle':
+            axis_angle = pose[:, :3]
+            trans = pose[:, 3:]
+            rot_matrix = pytorch3d_transforms.so3_exp_map(axis_angle)
+        elif self.rotation_type == '6d':
+            rot_6d = pose[:, :6]
+            trans = pose[:, 6:]
+            rot_matrix = pytorch3d_transforms.rotation_6d_to_matrix(rot_6d)
+        elif self.rotation_type == 'euler':
+            angles = pose[:, :3]
+            trans = pose[:, 3:]
+            rot_matrix = pytorch3d_transforms.euler_angles_to_matrix(
+                angles, convention='ZYX'
+            )
+        else:
+            raise ValueError(f"Unsupported rotation_type: {self.rotation_type}")
+        # Forward transform: P' = R @ P + t
+        pts_transformed = torch.matmul(pts, rot_matrix.transpose(-2, -1)) + trans.unsqueeze(1)
+        return pts_transformed
 
     def test_step(self, batch_sample):
-        """Perform single evaluation step (same as cotrainer.py eval_step)
+        """Perform single evaluation step (aligned with two_stage_trainer.py eval_step)
         
         Returns:
             angle_errors: Rotation errors in degrees (ACFM refined)
@@ -230,81 +264,66 @@ class ACFMEvaluator:
         self.acfm.eval()
         
         with torch.no_grad():
-            # GT pose
+            # Extract GT pose
             rot_part_6d = batch_sample['zero_mean_gt_pose'][:, :6].to(self.device)
             trans_part = batch_sample['zero_mean_gt_pose'][:, -3:].to(self.device)
-            gt_pose_continuous = torch.cat([rot_part_6d, trans_part], dim=1)
-            
-            # Point cloud features
-            pts_feat = self.dfm.extract_pts_feature(batch_sample).to(self.device)
-            
-            # Stage 1: DFM
-            topk_info = self.dfm.predict_coarse_pose(pts_feat, step_size=self.cfg.T_dfm, k=self.k)
-            coarse_bins = topk_info['coarse_pose']
-            
-            # Convert angles using euler_angles_from_bins
-            coarse_angle_bins = coarse_bins[:, :3]
-            coarse_angles = euler_angles_from_bins(coarse_angle_bins, self.dfm.num_bins)
-            coarse_angles = normalize_angles(coarse_angles)  # Normalize to [-pi, pi]
-            
-            # Convert translation using bins_to_numbers
-            coarse_trans_bins = coarse_bins[:, 3:]
-            coarse_trans = bins_to_numbers(
-                coarse_trans_bins,
-                self.trans_stats,
-                self.dfm.num_bins
-            )
-            
-            # Optimization: use 3D Euler angles consistently
-            coarse_pose_continuous = torch.cat([coarse_angles, coarse_trans], dim=1)
-            
-            # Compute coarse errors (for comparison)
-            coarse_rot_matrix = pytorch3d_transforms.euler_angles_to_matrix(
-                coarse_angles, convention='ZYX'
-            )
             gt_rot_matrix = pytorch3d_transforms.rotation_6d_to_matrix(rot_part_6d)
+            
+            # Extract point cloud
+            pts = batch_sample['pts'].to(self.device)
+            pts_original = batch_sample['zero_mean_pts'].to(self.device)
+            dfm_pts_feat = self.dfm.extract_pts_feature(pts).to(self.device)
+            
+            # Stage 1: DFM prediction
+            topk_info = self.dfm.predict_coarse_pose(dfm_pts_feat, step_size=self.cfg.T_dfm, k=self.k)
+            coarse_pose_continuous = self._bins_to_continuous_pose(topk_info['coarse_pose'])
+            
+            # Transform point cloud by coarse pose
+            if self.pts_transform:
+                pts_transformed = self._transform_pointcloud_by_pose(pts_original, coarse_pose_continuous)
+            else:
+                pts_transformed = pts_original
+            
+            # Extract point cloud features for ACFM
+            acfm_pts_feat = self.acfm.extract_pts_feature(pts_transformed).to(self.device)
+            
+            # Compute Stage 1 errors
+            if self.rotation_type == 'axis_angle':
+                coarse_rot_matrix = pytorch3d_transforms.so3_exp_map(coarse_pose_continuous[:, :3])
+                coarse_trans = coarse_pose_continuous[:, 3:]
+            elif self.rotation_type == '6d':
+                coarse_rot_matrix = pytorch3d_transforms.rotation_6d_to_matrix(coarse_pose_continuous[:, :6])
+                coarse_trans = coarse_pose_continuous[:, 6:]
+            else:  # euler
+                coarse_rot_matrix = pytorch3d_transforms.euler_angles_to_matrix(
+                    coarse_pose_continuous[:, :3], convention='ZYX'
+                )
+                coarse_trans = coarse_pose_continuous[:, 3:]
+            
             coarse_angle_errors = rot_diff_degree(coarse_rot_matrix, gt_rot_matrix)
             coarse_trans_errors = torch.norm(coarse_trans - trans_part, dim=1)
             
-            # Stage 2: ACFM
-            delta_pred = self.acfm.sample(
-                pts_feat, coarse_pose_continuous, topk_info,
-                step_size=self.cfg.T_acfm, method='euler'
-            )
+            # Stage 2: ACFM - Direct Prediction
+            pred_pose = self.acfm.sample(acfm_pts_feat, topk_info, self.trans_stats, step_size=self.cfg.T_acfm, method='euler')
             
-            # 🔧 FIX: Properly add angle residual with wrapping
-            pred_angles_delta = delta_pred[:, :3]
-            pred_trans_delta = delta_pred[:, 3:]
-            print(f"pred_angles_delta: {pred_angles_delta}")
-            coarse_angles = coarse_pose_continuous[:, :3]
-            coarse_trans = coarse_pose_continuous[:, 3:]
+            # Decompose predicted pose
+            if self.rotation_type == 'axis_angle':
+                pred_rot_matrix = pytorch3d_transforms.so3_exp_map(pred_pose[:, :3])
+                pred_trans = pred_pose[:, 3:]
+            elif self.rotation_type == '6d':
+                pred_rot_matrix = pytorch3d_transforms.rotation_6d_to_matrix(pred_pose[:, :6])
+                pred_trans = pred_pose[:, 6:]
+            else:  # Euler
+                pred_rot_matrix = pytorch3d_transforms.euler_angles_to_matrix(
+                    pred_pose[:, :3], convention='ZYX'
+                )
+                pred_trans = pred_pose[:, 3:]
             
-            # Use proper angle addition
-            pred_angles = add_angle_residual(coarse_angles, pred_angles_delta)
-            pred_trans = coarse_trans + pred_trans_delta
-            
-            # Final prediction (in Euler space)
-            pred_pose = torch.cat([pred_angles, pred_trans], dim=1)
-            
-            # Compute errors
-            pred_angles = pred_pose[:, :3]
-            pred_trans = pred_pose[:, 3:]
-            gt_rot_6d = gt_pose_continuous[:, :6]  # GT is originally 6D rotation + 3D translation
-            gt_trans = gt_pose_continuous[:, 6:]
-            
-            # Euler -> Matrix -> 6D (for consistency check or just compare matrices directly)
-            pred_rot_matrix = pytorch3d_transforms.euler_angles_to_matrix(
-                pred_angles, convention='ZYX'  # Use ZYX to match DFM
-            )
-            gt_rot_matrix = pytorch3d_transforms.rotation_6d_to_matrix(gt_rot_6d)
-            
-            # Compute rotation error (degrees)
+            # Compute Stage 2 errors
             angle_errors = rot_diff_degree(pred_rot_matrix, gt_rot_matrix)
+            trans_errors = torch.norm(pred_trans - trans_part, dim=1)
             
-            # Compute translation error (meters)
-            trans_errors = torch.norm(pred_trans - gt_trans, dim=1)
-            
-            return angle_errors, trans_errors, coarse_angle_errors, coarse_trans_errors, pred_angles_delta, pred_trans_delta
+            return angle_errors, trans_errors, coarse_angle_errors, coarse_trans_errors
 
 
 def evaluate_model(cfg, test_loader, trans_stats):
@@ -333,10 +352,10 @@ def evaluate_model(cfg, test_loader, trans_stats):
         
         with torch.no_grad():
             # Perform evaluation step
-            angle_errors, trans_errors, coarse_angle_errors, coarse_trans_errors, pred_delta_rot, pred_delta_trans = evaluator.test_step(test_batch)
+            angle_errors, trans_errors, coarse_angle_errors, coarse_trans_errors = evaluator.test_step(test_batch)
             
             # Update metrics
-            metrics.update(angle_errors, trans_errors, coarse_angle_errors, coarse_trans_errors, pred_delta_rot, pred_delta_trans)
+            metrics.update(angle_errors, trans_errors, coarse_angle_errors, coarse_trans_errors)
             
             # Print batch statistics
             batch_stats = metrics.get_batch_stats(angle_errors, trans_errors, 

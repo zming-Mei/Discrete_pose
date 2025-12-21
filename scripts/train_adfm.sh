@@ -1,0 +1,26 @@
+CUDA_VISIBLE_DEVICES="0" python runners/two_stage_ADFM.py \
+--data_path ../ArtImage-High-level/ArtImage \
+--batch_size 96 \
+--total_steps 50000 \
+--eval_freq_steps 1000 \
+--lr 5e-4 \
+--eta_min 3e-6 \
+--mse_weight 0.2 \
+--kl_weight 1 \
+--L1_weight 1 \
+--T_dfm 0.1 \
+--T_adfm 0.01 \
+--output_dir ckpts/ADFM_lr5e-4_5w_0.2_1_1topk5_36coarse_36fine \
+--seed 42 \
+--num_bins 36 \
+--num_fine_bins 36 \
+--cate_id 1 \
+--joint_num 1 \
+--num_parts 2 \
+--num_workers 8 \
+--topk_k 5 \
+--freeze_dfm True \
+--dfm_pretrained_path ckpts/DFM_lr5e-4_8w_36bins_0_1_0.1_new_attention/step_80000_angle_6.7899_trans_0.0500.pt \
+--pts_encoder pointnet2 \
+--is_train
+

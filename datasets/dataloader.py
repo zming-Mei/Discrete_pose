@@ -283,7 +283,7 @@ class PoseDataset(data.Dataset):
 
 
         """
-        pcd_test = o3d.io.read_point_cloud(osp.join('/home/jhn/pose_state_segmentation_size/pc_full','laptop_{}_all.xyz'.format(str(urdf_id))))
+        pcd_test = o3d.io.read_point_cloud(osp.join('/pose_state_segmentation_size/pc_full','laptop_{}_all.xyz'.format(str(urdf_id))))
         aabb_test = pcd_test.get_axis_aligned_bounding_box() 
         bbox_dims_test = aabb_test.get_extent()
         """

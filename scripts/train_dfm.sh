@@ -10,8 +10,7 @@ CUDA_VISIBLE_DEVICES="0" python runners/DFM_trainer.py \
 --L1_weight 0.1 \
 --num_bins 72 \
 --T_dfm 0.01 \
---output_dir ckpts/DFM_lr5e-4_8w_72bins_pts_3 \
---pretrained_model_path ckpts/DFM_lr5e-4_8w_72bins_pts_3/step_15000_angle_30.5486_trans_0.1147.pt \
+--output_dir ckpts/DFM_lr5e-4_8w_72bins_baseline \
 --eval_freq_steps 2500 \
 --seed 42 \
 --cate_id 1 \

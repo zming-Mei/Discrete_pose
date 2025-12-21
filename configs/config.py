@@ -44,9 +44,11 @@ def get_config():
     parser.add_argument('--sampling_steps', type=int)
     parser.add_argument('--pointnet2_params', type=str, default='light')
     parser.add_argument('--pts_encoder', type=str, default='pointnet2')
-    parser.add_argument('--num_bins', type=int, default=360)
+    parser.add_argument('--num_bins', type=int, default=360, help='Number of coarse bins for Stage 1 (DFM)')
+    parser.add_argument('--num_fine_bins', type=int, default=36, help='Number of fine bins for Stage 2 (ADFM). Defaults to num_bins if not specified.')
     parser.add_argument('--T_dfm', type=float, default=0.01)  # step_size for DFM sampling
     parser.add_argument('--T_acfm', type=float, default=0.01)  # step_size for ACFM sampling
+    parser.add_argument('--T_adfm', type=float, default=0.01)  # step_size for ADFM sampling (discrete stage 2)
     
     """ loss weights """
     parser.add_argument('--mse_weight', type=float, default=0)
@@ -56,6 +58,7 @@ def get_config():
     parser.add_argument('--rotation_weight', type=float, default=1.0)
     parser.add_argument('--translation_weight', type=float, default=1.0)
     parser.add_argument('--pose_prediction_weight', type=float, default=0.1)  # Weight for pose prediction loss (angle + translation)
+    parser.add_argument('--metric_loss_weight', type=float, default=0.1)  # Weight for metric-based loss (angle in rad + trans in m)
 
     """ training """
     parser.add_argument('--pretrained_model_path', type=str)
@@ -81,9 +84,15 @@ def get_config():
     parser.add_argument('--topk_k', type=int, default=10)
     parser.add_argument('--dfm_pretrained_path', type=str, default=None)
     parser.add_argument('--acfm_pretrained_path', type=str, default=None)
+    parser.add_argument('--mlp_pretrained_path', type=str, default=None)  # Pretrained MLP (DirectPoseMLP) for two-stage training
+    parser.add_argument('--adfm_pretrained_path', type=str, default=None)  # Pretrained ADFM (discrete stage 2)
     parser.add_argument('--dfm_cache_path', type=str, default=None, help='Path to precomputed DFM cache for faster training')
     parser.add_argument('--acfm_rotation_type', type=str, default='euler', choices=['euler', '6d', 'axis_angle'], 
                         help='Rotation representation for ACFM output: euler (3D) or 6d (6D rotation)')
+    parser.add_argument('--acfm_predict_delta', type=str2bool, default=False,
+                        help='If True, ACFM predicts delta (residual) w.r.t. coarse_pose_sample (sampled from DFM Top-K bins) instead of predicting absolute GT pose.')
+    parser.add_argument('--use_normalization', type=str2bool, default=True,
+                        help='Normalize pose to [-1, 1] range for training stability')
     parser.add_argument('--filter_bad_data', type=str2bool, default=True)
     parser.add_argument('--pts_transform', type=str2bool, default=False)
     """ testing """

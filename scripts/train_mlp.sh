@@ -1,0 +1,37 @@
+#!/bin/bash
+
+# Training script for Two-Stage MLP Trainer (DFM + DirectPoseMLP)
+
+CUDA_VISIBLE_DEVICES="0" python runners/two_stage_MLP_trainer.py \
+    --data_path ../ArtImage-High-level/ArtImage \
+    --batch_size 192 \
+    --total_steps 30000 \
+    --eval_freq_steps 1000 \
+    --lr 2e-4 \
+    --eta_min 3e-6 \
+    --rotation_weight 1 \
+    --translation_weight 1.0 \
+    --pose_prediction_weight 0.5 \
+    --metric_loss_weight 0 \
+    --T_dfm 0.1 \
+    --T_acfm 0.01 \
+    --output_dir ckpts/MLP/MLP_lr2e-4_5w_1_1_0.5_0_6D_topk3_36bins_bs192 \
+    --seed 42 \
+    --num_bins 36 \
+    --cate_id 1 \
+    --joint_num 1 \
+    --num_parts 2 \
+    --num_workers 8 \
+    --topk_k 3 \
+    --freeze_dfm True \
+    --use_normalization False \
+    --acfm_rotation_type 6d \
+    --filter_bad_data False \
+    --pts_transform False \
+    --dfm_pretrained_path ckpts/DFM_lr5e-4_8w_36bins_0_1_0.1_new_attention/step_80000_angle_6.7899_trans_0.0500.pt \
+    --pts_encoder pointnet2 \
+    --is_train
+
+# Note: To enable acfm_predict_delta, add this line above --dfm_pretrained_path:
+#     --acfm_predict_delta True \
+
